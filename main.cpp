@@ -551,20 +551,20 @@ static void DrawCommandList()
                         idx.c_str(), is_selected,
                         ImGuiSelectableFlags_SpanAllColumns |
                             ImGuiSelectableFlags_AllowOverlap);
-                    bool row_hovered = ImGui::IsItemHovered();
+                    // IsItemHovered() immediately after Selectable runs
+                    // before the fold button is submitted, so the
+                    // AllowOverlap check can't see the button yet and
+                    // would report the row hovered even when the mouse
+                    // is over the button. Capture the raw "over-rect"
+                    // hover here, subtract out the button's own hover
+                    // after it's drawn.
+                    bool row_over_rect = ImGui::IsItemHovered(
+                        ImGuiHoveredFlags_AllowWhenOverlappedByItem);
                     if (!is_active)
                         ImGui::PopStyleColor();
                     ImGui::PopStyleColor(3);
                     if (pressed)
                         f->selected_cmd = i;
-                    if (is_selected)
-                        ImGui::TableSetBgColor(
-                            ImGuiTableBgTarget_RowBg1,
-                            ImGui::GetColorU32(ImGuiCol_Header));
-                    else if (row_hovered)
-                        ImGui::TableSetBgColor(
-                            ImGuiTableBgTarget_RowBg1,
-                            ImGui::GetColorU32(ImGuiCol_HeaderHovered));
                     if (is_selected && g.scroll_to_cmd)
                     {
                         ImGui::ScrollToItem(ImGuiScrollFlags_KeepVisibleEdgeY);
@@ -578,22 +578,29 @@ static void DrawCommandList()
                                             0));
                         ImGui::SameLine(0, 0);
                     }
+                    bool btn_hovered = false;
                     if (cmds[i].range_end >= 0)
                     {
                         bool col = (i < (int)f->collapsed.size())
                                        ? (bool)f->collapsed[i]
                                        : false;
+                        // ArrowButton sizes itself to GetFrameHeight
+                        // (font + 2*FramePadding.y). Zero out vertical
+                        // padding so the button matches text height and
+                        // the row doesn't grow past the Selectable's
+                        // hit rect.
+                        ImGui::PushStyleVar(ImGuiStyleVar_FramePadding,
+                                            ImVec2(0, 0));
                         if (ImGui::ArrowButton("##fold", col ? ImGuiDir_Right
                                                              : ImGuiDir_Down))
                         {
                             f->collapsed[i] = !col;
-                            // Snap selection out of the range we just hid
-                            // so the highlight stays on a visible row;
-                            // land on the matching close marker.
                             if (!col && f->selected_cmd > i &&
                                 f->selected_cmd <= cmds[i].range_end)
                                 f->selected_cmd = cmds[i].range_end;
                         }
+                        btn_hovered = ImGui::IsItemHovered();
+                        ImGui::PopStyleVar();
                         ImGui::SameLine();
                     }
                     if (!is_active)
@@ -602,6 +609,14 @@ static void DrawCommandList()
                     if (!is_active)
                         ImGui::PopStyleColor();
                     ImGui::PopID();
+                    if (is_selected)
+                        ImGui::TableSetBgColor(
+                            ImGuiTableBgTarget_RowBg1,
+                            ImGui::GetColorU32(ImGuiCol_Header));
+                    else if (row_over_rect && !btn_hovered)
+                        ImGui::TableSetBgColor(
+                            ImGuiTableBgTarget_RowBg1,
+                            ImGui::GetColorU32(ImGuiCol_HeaderHovered));
                 }
                 ImGui::EndTable();
             }
