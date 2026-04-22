@@ -52,6 +52,27 @@ target_include_directories(aosp_libbase PRIVATE
 )
 target_link_libraries(aosp_libbase PUBLIC aosp_platform)
 
+# ---- libmath (header-only) ----
+add_library(aosp_libmath INTERFACE)
+target_include_directories(aosp_libmath INTERFACE libmath/include)
+
+# ---- arect (header-only NDK) ----
+add_library(aosp_arect INTERFACE)
+target_include_directories(aosp_arect INTERFACE arect/include)
+
+# ---- ftl (header-only template lib from frameworks/native/include/ftl) ----
+add_library(aosp_ftl INTERFACE)
+target_include_directories(aosp_ftl INTERFACE ftl/include)
+target_link_libraries(aosp_ftl INTERFACE aosp_platform aosp_libbase)
+
+# ---- libui value types (Rect, Region, Transform, PixelFormat, ColorSpace) ----
+file(GLOB LIBUI_SRC CONFIGURE_DEPENDS libui/src/*.cpp)
+add_library(aosp_libui STATIC ${LIBUI_SRC})
+target_include_directories(aosp_libui PUBLIC libui/include)
+target_link_libraries(aosp_libui PUBLIC
+    aosp_platform aosp_libutils aosp_libbase aosp_libmath aosp_arect)
+
 # Convenience aggregate.
 add_library(aosp INTERFACE)
-target_link_libraries(aosp INTERFACE aosp_libutils aosp_libbase)
+target_link_libraries(aosp INTERFACE
+    aosp_libutils aosp_libbase aosp_libmath aosp_arect aosp_ftl aosp_libui)
