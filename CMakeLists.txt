@@ -62,8 +62,10 @@ else()
     add_compile_options(-fno-rtti)
 endif()
 
+add_subdirectory(aosp)
+
 add_executable(layerviewer main.cpp)
-target_link_libraries(layerviewer PRIVATE imgui SDL3::SDL3-static skia)
+target_link_libraries(layerviewer PRIVATE imgui SDL3::SDL3-static skia aosp)
 
 if(APPLE)
     target_link_libraries(layerviewer PRIVATE

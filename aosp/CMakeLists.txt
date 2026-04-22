@@ -1,0 +1,57 @@
+# AOSP subset for layerviewer. All targets link against aosp_platform, which
+# sets up include paths for the shim headers (liblog, libcutils) and AOSP
+# source-layout includes.
+
+# Platform abstraction: shim headers come FIRST so system <android/log.h>,
+# <cutils/...> etc resolve to our no-op versions rather than Android's.
+add_library(aosp_platform INTERFACE)
+target_include_directories(aosp_platform INTERFACE
+    ${CMAKE_CURRENT_SOURCE_DIR}/shim/include
+    # libbase headers are used by libutils too, so expose here.
+    ${CMAKE_CURRENT_SOURCE_DIR}/libbase/include
+)
+target_compile_definitions(aosp_platform INTERFACE
+    # Drop Android-specific Bionic detection so libbase/libutils take host paths.
+    __STDC_FORMAT_MACROS=1
+)
+# Tell libbase/libutils we're NOT on Android/Bionic. They have !defined(__BIONIC__)
+# and !defined(__ANDROID__) host fallbacks.
+
+# Suppress the wall of warnings from ported AOSP code.
+if(NOT MSVC)
+    target_compile_options(aosp_platform INTERFACE
+        -Wno-unused-parameter
+        -Wno-unused-variable
+        -Wno-unused-function
+        -Wno-unused-private-field
+        -Wno-missing-field-initializers
+        -Wno-sign-compare
+        -Wno-deprecated-declarations
+        -Wno-gnu-statement-expression
+        -Wno-c99-designator
+        -Wno-format-security
+    )
+endif()
+
+# ---- libutils ----
+file(GLOB LIBUTILS_SRC CONFIGURE_DEPENDS libutils/src/*.cpp)
+add_library(aosp_libutils STATIC ${LIBUTILS_SRC})
+target_include_directories(aosp_libutils PUBLIC
+    libutils/include
+)
+target_link_libraries(aosp_libutils PUBLIC aosp_platform)
+
+# ---- libbase ----
+file(GLOB LIBBASE_SRC CONFIGURE_DEPENDS libbase/src/*.cpp)
+add_library(aosp_libbase STATIC ${LIBBASE_SRC})
+target_include_directories(aosp_libbase PUBLIC
+    libbase/include
+)
+target_include_directories(aosp_libbase PRIVATE
+    libbase/src
+)
+target_link_libraries(aosp_libbase PUBLIC aosp_platform)
+
+# Convenience aggregate.
+add_library(aosp INTERFACE)
+target_link_libraries(aosp INTERFACE aosp_libutils aosp_libbase)
