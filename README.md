@@ -1,18 +1,18 @@
-# skpviz
+# layerviewer
 
-Local SKP file replay and debugging tool.
+Scaffold for an AOSP layer-trace viewer: SDL3 + ImGui + Skia (Ganesh/GL).
 
-![screenshot](screenshots/screenshot.png)
-![screenshot](screenshots/screenshot2.png)
+The plan is to clone a subset of AOSP `frameworks/native` — SurfaceFlinger
+frontend, CompositionEngine, RenderEngine — and stub out HAL / HWComposer /
+GraphicBuffer / Fence so the real SF code can replay a captured layer trace
+and render it here.
 
 ## Building
 
-Everything builds from source. Dependencies are git submodules.
+Dependencies are git submodules.
 
 ```sh
-git clone --recursive https://github.com/cairnc/skpviz.git
-cd skpviz
-git config core.hooksPath .githooks  # enable clang-format on commit
+git submodule update --init --recursive
 ```
 
 ### macOS
@@ -68,24 +68,7 @@ cmake --build build
 ### Run
 
 ```sh
-./build/skpviz path/to/file.skp
-```
-
-Generate a test SKP:
-
-```sh
-./build/make-test-skp test.skp
-./build/skpviz test.skp
-```
-
-## Downloads
-
-Pre-built binaries are on the [Releases](https://github.com/cairnc/skpviz/releases) page. All binaries are built from source by [GitHub Actions](.github/workflows/release.yml).
-
-On macOS, you need to remove the quarantine attribute before running:
-
-```sh
-xattr -cr ./skpviz
+./build/layerviewer
 ```
 
 ## License

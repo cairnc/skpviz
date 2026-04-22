@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(skpviz C CXX)
+project(layerviewer C CXX)
 if(APPLE)
     enable_language(OBJC)
 endif()
@@ -13,14 +13,13 @@ if(MSVC)
     set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 endif()
 
-# SDL3: windowing, events, clipboard, file dialogs.
+# SDL3: windowing, events.
 set(SDL_SHARED OFF CACHE BOOL "" FORCE)
 set(SDL_STATIC ON CACHE BOOL "" FORCE)
 set(SDL_TEST_LIBRARY OFF CACHE BOOL "" FORCE)
 set(SDL_TESTS OFF CACHE BOOL "" FORCE)
 set(SDL_EXAMPLES OFF CACHE BOOL "" FORCE)
 set(SDL_INSTALL OFF CACHE BOOL "" FORCE)
-# Disable subsystems we don't use to keep the build small.
 set(SDL_AUDIO OFF CACHE BOOL "" FORCE)
 set(SDL_HAPTIC OFF CACHE BOOL "" FORCE)
 set(SDL_JOYSTICK OFF CACHE BOOL "" FORCE)
@@ -63,11 +62,11 @@ else()
     add_compile_options(-fno-rtti)
 endif()
 
-add_executable(skpviz main.cpp skia_backend.cpp gl_extras.cpp)
-target_link_libraries(skpviz PRIVATE imgui SDL3::SDL3-static skia)
+add_executable(layerviewer main.cpp)
+target_link_libraries(layerviewer PRIVATE imgui SDL3::SDL3-static skia)
 
 if(APPLE)
-    target_link_libraries(skpviz PRIVATE
+    target_link_libraries(layerviewer PRIVATE
         "-framework OpenGL"
         "-framework CoreFoundation"
         "-framework CoreGraphics"
@@ -78,56 +77,13 @@ if(APPLE)
         "-framework ApplicationServices"
     )
 elseif(WIN32)
-    target_link_libraries(skpviz PRIVATE
+    target_link_libraries(layerviewer PRIVATE
         opengl32 gdi32 user32 shell32 ole32 uuid
         fontsub usp10 dwrite
     )
 else()
-    target_link_libraries(skpviz PRIVATE
+    target_link_libraries(layerviewer PRIVATE
         GL pthread dl m
         fontconfig freetype
     )
 endif()
-
-# Test SKP generators
-add_executable(make-test-skp make_test_skp.cpp)
-add_executable(make-test-mskp make_test_mskp.cpp)
-add_executable(make-test-layers-mskp make_test_layers_mskp.cpp)
-target_link_libraries(make-test-skp PRIVATE skia)
-target_link_libraries(make-test-mskp PRIVATE skia)
-target_link_libraries(make-test-layers-mskp PRIVATE skia)
-
-if(APPLE)
-    set(TESTSKP_FRAMEWORKS
-        "-framework CoreFoundation"
-        "-framework CoreGraphics"
-        "-framework CoreText"
-        "-framework Metal"
-        "-framework Foundation"
-        "-framework ImageIO"
-        "-framework ApplicationServices"
-    )
-    target_link_libraries(make-test-skp PRIVATE ${TESTSKP_FRAMEWORKS})
-    target_link_libraries(make-test-mskp PRIVATE ${TESTSKP_FRAMEWORKS})
-    target_link_libraries(make-test-layers-mskp PRIVATE ${TESTSKP_FRAMEWORKS})
-elseif(WIN32)
-    target_link_libraries(make-test-skp PRIVATE gdi32 user32 ole32 uuid fontsub usp10 dwrite)
-    target_link_libraries(make-test-mskp PRIVATE gdi32 user32 ole32 uuid fontsub usp10 dwrite)
-    target_link_libraries(make-test-layers-mskp PRIVATE gdi32 user32 ole32 uuid fontsub usp10 dwrite)
-else()
-    target_link_libraries(make-test-skp PRIVATE pthread dl m fontconfig freetype)
-    target_link_libraries(make-test-mskp PRIVATE pthread dl m fontconfig freetype)
-    target_link_libraries(make-test-layers-mskp PRIVATE pthread dl m fontconfig freetype)
-endif()
-
-add_custom_target(skp
-    COMMAND make-test-skp ${CMAKE_BINARY_DIR}/test.skp
-    DEPENDS make-test-skp
-    WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
-)
-
-add_custom_target(run
-    COMMAND skpviz ${CMAKE_BINARY_DIR}/test.skp
-    DEPENDS skpviz skp
-    WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
-)
