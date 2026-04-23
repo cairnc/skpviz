@@ -1,11 +1,24 @@
-// LayerMetadata shim — flat_map<int, bytes> + well-known keys. FE uses
-// .mMap iteration and .clear() only; the Parcelable surface is a no-op.
+/*
+ * Copyright 2019 The Android Open Source Project
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *      http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 #pragma once
 
 #include <binder/Parcelable.h>
-#include <cstdint>
+
 #include <unordered_map>
-#include <vector>
 
 namespace android::gui {
 
@@ -22,43 +35,51 @@ enum {
 };
 
 struct LayerMetadata : public Parcelable {
-  LayerMetadata() = default;
-  LayerMetadata(const LayerMetadata &) = default;
-  LayerMetadata &operator=(const LayerMetadata &) = default;
-
   std::unordered_map<uint32_t, std::vector<uint8_t>> mMap;
 
-  bool has(uint32_t key) const { return mMap.count(key) != 0; }
-  int32_t getInt32(uint32_t key, int32_t fallback) const {
-    auto it = mMap.find(key);
-    if (it == mMap.end() || it->second.size() < sizeof(int32_t))
-      return fallback;
-    int32_t v;
-    memcpy(&v, it->second.data(), sizeof(v));
-    return v;
-  }
-  void setInt32(uint32_t key, int32_t value) {
-    std::vector<uint8_t> buf(sizeof(value));
-    memcpy(buf.data(), &value, sizeof(value));
-    mMap[key] = std::move(buf);
-  }
-  void merge(const LayerMetadata &other, bool /*eraseEmpty*/ = false) {
-    for (const auto &[k, v] : other.mMap)
-      mMap[k] = v;
-  }
-  bool empty() const { return mMap.empty(); }
-  void clear() { mMap.clear(); }
+  LayerMetadata();
+  LayerMetadata(const LayerMetadata &other);
+  LayerMetadata(LayerMetadata &&other);
+  explicit LayerMetadata(
+      std::unordered_map<uint32_t, std::vector<uint8_t>> map);
+  LayerMetadata &operator=(const LayerMetadata &other);
+  LayerMetadata &operator=(LayerMetadata &&other);
+
+  // Merges other into this LayerMetadata. If eraseEmpty is true, any entries in
+  // in this whose keys are paired with empty values in other will be erased.
+  bool merge(const LayerMetadata &other, bool eraseEmpty = false);
+
+  status_t writeToParcel(Parcel *parcel) const override;
+  status_t readFromParcel(const Parcel *parcel) override;
+
+  bool has(uint32_t key) const;
+  int32_t getInt32(uint32_t key, int32_t fallback) const;
+  void setInt32(uint32_t key, int32_t value);
+  std::optional<int64_t> getInt64(uint32_t key) const;
+  void setInt64(uint32_t key, int64_t value);
+
+  std::string itemToString(uint32_t key, const char *separator) const;
 };
 
-// Mirrors GameManager.java — FE port reads `gui::GameMode` through this
-// header in real AOSP, so keep the symbol in the same spot.
+// Keep in sync with the GameManager.java constants.
 enum class GameMode : int32_t {
   Unsupported = 0,
   Standard = 1,
   Performance = 2,
   Battery = 3,
   Custom = 4,
-  ftl_last = Custom,
+
+  ftl_last = Custom
 };
 
 } // namespace android::gui
+
+using android::gui::METADATA_ACCESSIBILITY_ID;
+using android::gui::METADATA_CALLING_UID;
+using android::gui::METADATA_DEQUEUE_TIME;
+using android::gui::METADATA_GAME_MODE;
+using android::gui::METADATA_MOUSE_CURSOR;
+using android::gui::METADATA_OWNER_PID;
+using android::gui::METADATA_OWNER_UID;
+using android::gui::METADATA_TASK_ID;
+using android::gui::METADATA_WINDOW_TYPE;

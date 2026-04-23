@@ -45,3 +45,9 @@ namespace android {
 using ISurfaceComposerClient = ::android::gui::ISurfaceComposerClient;
 using gui::FrameTimelineInfo;
 } // namespace android
+// Upstream LayerState.h uses SpHash<T> unqualified in android:: scope.
+// Drag the gui:: one up so that works.
+#include <gui/SpHash.h>
+namespace android {
+using gui::SpHash;
+}
