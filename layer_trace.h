@@ -32,6 +32,10 @@ struct CapturedLayer {
   float colorR = 0.f, colorG = 0.f, colorB = 0.f, colorA = 1.f;
   bool hasBuffer = false;
   uint64_t bufferFrame = 0;
+  // Unique id of the externalTexture (SurfaceFlinger's GraphicBuffer id).
+  // Used as the "big number" watermark in the wireframe so overlapping
+  // layers with identical-looking bounds can still be told apart.
+  uint64_t bufferId = 0;
 
   // Child ids in traversal order — only populated for reachable layers.
   std::vector<uint32_t> childIds;

@@ -48,9 +48,9 @@ namespace {
 constexpr uint32_t kUnassignedLayerId = 0xffffffffu;
 
 struct View3D {
-  float yawDeg = 25.f;         // rotation around vertical screen axis
-  float pitchDeg = 10.f;       // rotation around horizontal screen axis
-  bool showRankLabels = false; // diagnostic overlay
+  float yawDeg = 25.f;        // rotation around vertical screen axis
+  float pitchDeg = 10.f;      // rotation around horizontal screen axis
+  float depthSpacing = 200.f; // per-layer Z step in device pixels
 };
 
 struct AppState {
@@ -89,8 +89,10 @@ FitTransform FitRectToCanvas(float rw, float rh, float cw, float ch,
 // Layer tree
 // ---------------------------------------------------------------------------
 
+// Recursively draw one node, and push visible rows into `flat` in the order
+// they appear — used for up/down arrow key navigation.
 void DrawLayerTreeNode(const layerviewer::CapturedFrame &frame, uint32_t id,
-                       AppState &app) {
+                       AppState &app, std::vector<uint32_t> &flat) {
   auto it = frame.layersById.find(id);
   if (it == frame.layersById.end())
     return;
@@ -104,12 +106,11 @@ void DrawLayerTreeNode(const layerviewer::CapturedFrame &frame, uint32_t id,
   const bool selected = app.selectedLayerId == layer.id;
   if (selected)
     flags |= ImGuiTreeNodeFlags_Selected;
-  if (!layer.isVisible)
-    ImGui::PushStyleColor(ImGuiCol_Text, 0xff808080);
 
   ImGui::PushID(static_cast<int>(layer.id));
-  // Selection came from outside the tree (3D wireframe click etc.): force
-  // this branch open so the row is reachable, scroll to it, consume flag.
+  // Selection came from outside the tree (3D wireframe click, arrow-key
+  // nav etc.): force this branch open so the row is reachable, scroll to
+  // it, consume the flag.
   if (selected && app.scrollTreeToSelection)
     ImGui::SetNextItemOpen(true);
   bool open =
@@ -118,17 +119,15 @@ void DrawLayerTreeNode(const layerviewer::CapturedFrame &frame, uint32_t id,
     ImGui::SetScrollHereY(0.5f);
     app.scrollTreeToSelection = false;
   }
+  flat.push_back(layer.id);
   if (ImGui::IsItemClicked() && !ImGui::IsItemToggledOpen())
     app.selectedLayerId = layer.id;
   if (open) {
     for (uint32_t childId : layer.childIds)
-      DrawLayerTreeNode(frame, childId, app);
+      DrawLayerTreeNode(frame, childId, app, flat);
     ImGui::TreePop();
   }
   ImGui::PopID();
-
-  if (!layer.isVisible)
-    ImGui::PopStyleColor();
 }
 
 void DrawLayerTreePane(const layerviewer::CapturedFrame &frame, AppState &app) {
@@ -136,8 +135,36 @@ void DrawLayerTreePane(const layerviewer::CapturedFrame &frame, AppState &app) {
     ImGui::TextUnformatted("(no layers in this frame)");
     return;
   }
+  std::vector<uint32_t> visible;
+  visible.reserve(frame.layersById.size());
   for (uint32_t rootId : frame.rootIds)
-    DrawLayerTreeNode(frame, rootId, app);
+    DrawLayerTreeNode(frame, rootId, app, visible);
+
+  // Up/Down arrow selection when the Layers window is focused. Walks the
+  // same flat list that was just rendered, so collapsed branches are
+  // skipped correctly.
+  if (!visible.empty() &&
+      ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows)) {
+    bool up = ImGui::IsKeyPressed(ImGuiKey_UpArrow, true);
+    bool down = ImGui::IsKeyPressed(ImGuiKey_DownArrow, true);
+    if (up || down) {
+      int idx = -1;
+      for (size_t i = 0; i < visible.size(); i++) {
+        if (visible[i] == app.selectedLayerId) {
+          idx = static_cast<int>(i);
+          break;
+        }
+      }
+      if (idx < 0) {
+        idx = down ? 0 : static_cast<int>(visible.size() - 1);
+      } else {
+        idx = std::clamp(idx + (down ? 1 : -1), 0,
+                         static_cast<int>(visible.size() - 1));
+      }
+      app.selectedLayerId = visible[idx];
+      app.scrollTreeToSelection = true;
+    }
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -420,12 +447,17 @@ void DrawCheckerboard(SkCanvas *canvas, const SkRect &rect, float cellPx) {
 // fixed depth proportional to its paint-order rank; click-and-drag rotates
 // yaw/pitch. Drawn entirely with ImGui's DrawList — no Skia, no FBO.
 void DrawWireframe(const layerviewer::CapturedFrame &frame, AppState &app) {
-  constexpr float kDepthSpacing = 150.f; // fixed; deliberately generous
   constexpr float kPi = 3.14159265f;
+  const float kDepthSpacing = app.wireframe3D.depthSpacing;
 
   ImGui::TextDisabled("click and drag to rotate");
   ImGui::SameLine();
-  ImGui::Checkbox("show rank#", &app.wireframe3D.showRankLabels);
+  ImGui::Checkbox("show all layers", &app.showInvisible);
+  ImGui::SameLine();
+  ImGui::PushItemWidth(160);
+  ImGui::SliderFloat("spacing", &app.wireframe3D.depthSpacing, 0.f, 800.f,
+                     "%.0fpx");
+  ImGui::PopItemWidth();
 
   ImVec2 avail = ImGui::GetContentRegionAvail();
   if (avail.x < 4 || avail.y < 4)
@@ -437,9 +469,12 @@ void DrawWireframe(const layerviewer::CapturedFrame &frame, AppState &app) {
     ImVec2 delta = ImGui::GetIO().MouseDelta;
     app.wireframe3D.yawDeg += delta.x * 0.4f;
     app.wireframe3D.pitchDeg += delta.y * 0.4f;
-    app.wireframe3D.yawDeg = std::clamp(app.wireframe3D.yawDeg, -180.f, 180.f);
+    // Clamp yaw strictly inside (−90°, +90°) so we never rotate past the
+    // edge of the stack — looking from behind makes no sense for an
+    // exploded layer view and just flips the sort direction.
+    app.wireframe3D.yawDeg = std::clamp(app.wireframe3D.yawDeg, -85.f, 85.f);
     app.wireframe3D.pitchDeg =
-        std::clamp(app.wireframe3D.pitchDeg, -89.f, 89.f);
+        std::clamp(app.wireframe3D.pitchDeg, -85.f, 85.f);
   }
 
   ImDrawList *dl = ImGui::GetWindowDrawList();
@@ -550,23 +585,14 @@ void DrawWireframe(const layerviewer::CapturedFrame &frame, AppState &app) {
            p.viewZ);
     projs.push_back(p);
   }
-  // Sort by RANK, not by post-rotation viewZ of the center. The center-based
-  // sort wobbles when layers at different (x, y) positions have their XY
-  // contribution to viewZ (Y*sin(pitch), X*sin(yaw)*cos(pitch)) swamp the
-  // rank contribution — two adjacent ranks can swap in the overlap regions,
-  // showing as "random z-fighting" as you rotate.
-  //
-  // Rank is monotonic and matches the real compositor's paint order, so it
-  // produces a stable stack. Direction flips only when yaw rotates past
-  // ±90° (the stack physically inverts in view); otherwise we always paint
-  // largest rank first (farthest back in our convention) → rank 0 drawn
-  // last (on top). Hit-testing iterates projs in reverse so the frontmost
-  // drawn quad wins.
-  const bool flippedByYaw = cy_ < 0.f;
+  // Sort by RANK, not by post-rotation viewZ of the center. Center-based
+  // sort wobbled when a layer's (x, y) contribution to viewZ swamped the
+  // rank delta for adjacent layers. Yaw is clamped to ±85° so the stack
+  // direction is stable — largest rank first (farthest back in painter's
+  // sense), rank 0 drawn last (visually on top in overlap). Hit-testing
+  // iterates projs in reverse so the frontmost drawn quad wins.
   std::sort(projs.begin(), projs.end(),
-            [flippedByYaw](const Proj &a, const Proj &b) {
-              return flippedByYaw ? a.rank < b.rank : a.rank > b.rank;
-            });
+            [](const Proj &a, const Proj &b) { return a.rank > b.rank; });
 
   // Point-in-convex-quad via cross-product signs.
   auto pointInQuad = [](const ImVec2 &m, const ImVec2 &a, const ImVec2 &b,
@@ -592,28 +618,124 @@ void DrawWireframe(const layerviewer::CapturedFrame &frame, AppState &app) {
     }
   }
 
+  // Deterministic distinct color per layer id — golden-ratio hue spacing so
+  // adjacent ids never land on similar hues. Two pre-baked complementary
+  // tints per layer: the base and a deeper shade used for the checkerboard.
+  auto hsvToRgb = [](float h, float s, float v, float &r, float &g, float &b) {
+    h = h - std::floor(h);
+    float i = std::floor(h * 6.f);
+    float f = h * 6.f - i;
+    float p = v * (1.f - s);
+    float q = v * (1.f - s * f);
+    float t = v * (1.f - s * (1.f - f));
+    switch (static_cast<int>(i) % 6) {
+    case 0:
+      r = v;
+      g = t;
+      b = p;
+      return;
+    case 1:
+      r = q;
+      g = v;
+      b = p;
+      return;
+    case 2:
+      r = p;
+      g = v;
+      b = t;
+      return;
+    case 3:
+      r = p;
+      g = q;
+      b = v;
+      return;
+    case 4:
+      r = t;
+      g = p;
+      b = v;
+      return;
+    case 5:
+      r = v;
+      g = p;
+      b = q;
+      return;
+    }
+  };
+  auto colorsFor = [&](uint32_t id, ImU32 &light, ImU32 &dark) {
+    float hue = static_cast<float>(id) * 0.61803398875f; // golden ratio
+    float r, g, b;
+    hsvToRgb(hue, 0.55f, 0.92f, r, g, b);
+    light = IM_COL32(static_cast<int>(r * 255), static_cast<int>(g * 255),
+                     static_cast<int>(b * 255), 200);
+    hsvToRgb(hue, 0.75f, 0.55f, r, g, b);
+    dark = IM_COL32(static_cast<int>(r * 255), static_cast<int>(g * 255),
+                    static_cast<int>(b * 255), 200);
+  };
+
+  // Low-freq checkerboard — big cells (128 device-space pixels) so overlapping
+  // layers with similar colors can still be told apart by the checker
+  // phase. We project each cell corner into screen space so the checker
+  // rotates with the layer.
+  const float kCheckerCell = 128.f;
+
   // Draw far → near.
   for (const auto &p : projs) {
     bool selected = app.selectedLayerId == p.l->id;
-    float r = p.l->colorR >= 0 ? p.l->colorR : 0.5f;
-    float g = p.l->colorG >= 0 ? p.l->colorG : 0.6f;
-    float bl = p.l->colorB >= 0 ? p.l->colorB : 0.95f;
-    // ~70% opaque — enough solidity that each layer reads as a plane while
-    // still letting the stack show through at shallow pitch.
-    ImU32 fill = IM_COL32(static_cast<int>(r * 255), static_cast<int>(g * 255),
-                          static_cast<int>(bl * 255), 180);
-    dl->AddQuadFilled(p.c[0], p.c[1], p.c[2], p.c[3], fill);
+    ImU32 light, dark;
+    colorsFor(p.l->id, light, dark);
+
+    // Fill base (light color), then overlay dark-tinted cells to build the
+    // checkerboard directly as rotated sub-quads.
+    dl->AddQuadFilled(p.c[0], p.c[1], p.c[2], p.c[3], light);
+    const auto &b = p.l->geomLayerBounds;
+    float z = static_cast<float>(p.rank) * kDepthSpacing;
+    for (float cy = std::floor(b.top / kCheckerCell) * kCheckerCell;
+         cy < b.bottom; cy += kCheckerCell) {
+      for (float cx = std::floor(b.left / kCheckerCell) * kCheckerCell;
+           cx < b.right; cx += kCheckerCell) {
+        int ix = static_cast<int>(std::floor(cx / kCheckerCell));
+        int iy = static_cast<int>(std::floor(cy / kCheckerCell));
+        if (((ix + iy) & 1) == 0)
+          continue; // only dark cells overlaid
+        float x0 = std::max(cx, b.left);
+        float y0 = std::max(cy, b.top);
+        float x1 = std::min(cx + kCheckerCell, b.right);
+        float y1 = std::min(cy + kCheckerCell, b.bottom);
+        ImVec2 q0 = project(x0, y0, z);
+        ImVec2 q1 = project(x1, y0, z);
+        ImVec2 q2 = project(x1, y1, z);
+        ImVec2 q3 = project(x0, y1, z);
+        dl->AddQuadFilled(q0, q1, q2, q3, dark);
+      }
+    }
+
     ImU32 stroke =
-        selected ? IM_COL32(255, 215, 50, 255) : IM_COL32(150, 180, 230, 170);
+        selected ? IM_COL32(255, 215, 50, 255) : IM_COL32(40, 40, 50, 220);
     dl->AddQuad(p.c[0], p.c[1], p.c[2], p.c[3], stroke, selected ? 2.5f : 1.f);
 
-    if (app.wireframe3D.showRankLabels) {
-      float px0 = std::min({p.c[0].x, p.c[1].x, p.c[2].x, p.c[3].x});
-      float py0 = std::min({p.c[0].y, p.c[1].y, p.c[2].y, p.c[3].y});
-      char buf[32];
-      snprintf(buf, sizeof buf, "#%d", p.rank);
-      dl->AddText(ImVec2(px0 + 3, py0 + 1), IM_COL32(255, 255, 255, 220), buf);
-    }
+    // Big centered buffer-id watermark so overlapping layers can still be
+    // told apart by their underlying GraphicBuffer. Fall back to layer id
+    // when the layer has no buffer (container / effect layers).
+    ImVec2 center =
+        project(0.5f * (b.left + b.right), 0.5f * (b.top + b.bottom), z);
+    char buf[32];
+    if (p.l->bufferId)
+      snprintf(buf, sizeof buf, "%llu",
+               static_cast<unsigned long long>(p.l->bufferId));
+    else
+      snprintf(buf, sizeof buf, "#%u", p.l->id);
+    // Scale the watermark text with the projected quad height so small
+    // layers don't get a giant label.
+    float px0 = std::min({p.c[0].x, p.c[1].x, p.c[2].x, p.c[3].x});
+    float py0 = std::min({p.c[0].y, p.c[1].y, p.c[2].y, p.c[3].y});
+    float px1 = std::max({p.c[0].x, p.c[1].x, p.c[2].x, p.c[3].x});
+    float py1 = std::max({p.c[0].y, p.c[1].y, p.c[2].y, p.c[3].y});
+    float size = std::clamp(0.35f * std::min(px1 - px0, py1 - py0), 10.f, 64.f);
+    ImFont *font = ImGui::GetFont();
+    ImVec2 textSz = font->CalcTextSizeA(size, FLT_MAX, 0.f, buf);
+    dl->AddText(font, size,
+                ImVec2(center.x - textSz.x * 0.5f, center.y - textSz.y * 0.5f),
+                IM_COL32(15, 15, 20, 230), buf);
   }
 
   if (hovered && hoverId != kUnassignedLayerId) {
@@ -835,8 +957,29 @@ int main(int argc, char **argv) {
   ImGui::CreateContext();
   auto &io = ImGui::GetIO();
   io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;
-  io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
+  // Keyboard nav disabled: we drive our own arrow-key handlers for the
+  // layer tree and the timeline. ImGui's built-in nav was moving a hidden
+  // "focused" cursor on up/down without changing our selection, which just
+  // looked like nothing was happening.
   ImGui::StyleColorsDark();
+
+  // ImGui 1.91+ ships an embedded scalable font (ProggyForever) in addition
+  // to the ProggyClean bitmap one. AddFontDefaultVector renders crisply at
+  // any size / DPI with no file loading or binary embedding on our side.
+  io.Fonts->AddFontDefaultVector();
+
+  {
+    ImGuiStyle &s = ImGui::GetStyle();
+    // Selection highlight (ImGuiCol_Header) — default is a translucent
+    // blue that loses contrast against dark-theme text. Brighten it and
+    // lock text at near-white so rows clearly read as selected.
+    s.Colors[ImGuiCol_Header] = ImVec4(0.22f, 0.50f, 0.90f, 0.70f);
+    s.Colors[ImGuiCol_HeaderHovered] = ImVec4(0.30f, 0.58f, 0.96f, 0.80f);
+    s.Colors[ImGuiCol_HeaderActive] = ImVec4(0.26f, 0.54f, 0.94f, 0.92f);
+    s.Colors[ImGuiCol_Text] = ImVec4(0.94f, 0.96f, 1.0f, 1.0f);
+    s.Colors[ImGuiCol_TextDisabled] = ImVec4(0.55f, 0.58f, 0.63f, 1.0f);
+  }
+
   ImGui_ImplSDL3_InitForOpenGL(window, glCtx);
   ImGui_ImplOpenGL3_Init("#version 150");
 

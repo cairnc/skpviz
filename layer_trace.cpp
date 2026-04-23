@@ -70,6 +70,7 @@ CapturedLayer captureLayer(const LayerSnapshot &s) {
   c.colorA = static_cast<float>(s.color.a);
   c.hasBuffer = s.externalTexture != nullptr;
   c.bufferFrame = s.frameNumber;
+  c.bufferId = s.externalTexture ? s.externalTexture->getId() : 0;
   return c;
 }
 
