@@ -12,9 +12,11 @@
 namespace android {
 class Fence;
 
-namespace gui {
-enum class GameMode : int32_t {};
-} // namespace gui
+// GameMode now lives in gui/LayerMetadata.h; pull it in here too so TimeStats
+// signatures stay valid.
+} // namespace android
+#include <gui/LayerMetadata.h>
+namespace android {
 
 class TimeStats {
 public:

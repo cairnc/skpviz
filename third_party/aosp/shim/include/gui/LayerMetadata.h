@@ -50,4 +50,15 @@ struct LayerMetadata : public Parcelable {
   void clear() { mMap.clear(); }
 };
 
+// Mirrors GameManager.java — FE port reads `gui::GameMode` through this
+// header in real AOSP, so keep the symbol in the same spot.
+enum class GameMode : int32_t {
+  Unsupported = 0,
+  Standard = 1,
+  Performance = 2,
+  Battery = 3,
+  Custom = 4,
+  ftl_last = Custom,
+};
+
 } // namespace android::gui

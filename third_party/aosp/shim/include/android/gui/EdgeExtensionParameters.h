@@ -3,5 +3,10 @@
 #include <binder/Parcelable.h>
 #include <cstdint>
 namespace android::gui {
-struct EdgeExtensionParameters : public Parcelable {};
+struct EdgeExtensionParameters : public Parcelable {
+  bool extendLeft = false;
+  bool extendRight = false;
+  bool extendTop = false;
+  bool extendBottom = false;
+};
 } // namespace android::gui

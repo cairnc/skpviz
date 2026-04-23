@@ -1,7 +1,7 @@
-// Stub — FE holds this type by value/pointer only. Real impl is AIDL-generated.
+// Stub — FE holds sp<IWindowInfosReportedListener> fields; needs RefBase for
+// sp<> to work. Real impl is AIDL-generated.
 #pragma once
-#include <binder/Parcelable.h>
-#include <cstdint>
+#include <utils/RefBase.h>
 namespace android::gui {
-struct IWindowInfosReportedListener : public Parcelable {};
+class IWindowInfosReportedListener : public virtual RefBase {};
 } // namespace android::gui

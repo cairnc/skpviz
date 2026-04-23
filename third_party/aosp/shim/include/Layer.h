@@ -10,6 +10,11 @@
 #include <ui/GraphicTypes.h>
 #include <utils/RefBase.h>
 
+// Upstream Layer.h transitively pulls in FrontEnd/LayerSnapshot.h (through
+// the SF service headers). Replicate that so RequestedLayerState.cpp can
+// use LayerSnapshot::isOpaqueFormat unchanged.
+#include "FrontEnd/LayerSnapshot.h"
+
 namespace android {
 
 class Layer : public virtual RefBase {

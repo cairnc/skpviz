@@ -2,6 +2,7 @@
 // Any SF code path guarded by a flag stays on its default-off branch.
 #pragma once
 
+#include <android-base/thread_annotations.h>
 #include <cutils/compiler.h>
 #include <string>
 
@@ -72,6 +73,8 @@ public:
   LAYERVIEWER_FLAG(view_is_root_for_insets)
   LAYERVIEWER_FLAG(vsync_predictor_recovery)
   LAYERVIEWER_FLAG(local_tonemap_screenshots)
+  LAYERVIEWER_FLAG(override_trusted_overlay)
+  LAYERVIEWER_FLAG(vrr_bugfix_24q4)
   LAYERVIEWER_FLAG(begone_bright_hlg)
   LAYERVIEWER_FLAG(flush_buffer_slots_to_uncache)
   LAYERVIEWER_FLAG(fp)

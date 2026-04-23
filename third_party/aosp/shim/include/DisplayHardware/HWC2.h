@@ -40,6 +40,9 @@ public:
   using LayerRequest =
       ::android::hardware::graphics::composer::hal::LayerRequest;
   using Transform = ::android::hardware::graphics::composer::hal::Transform;
+  using BlendMode = ::aidl::android::hardware::graphics::common::BlendMode;
+  using DisplayRequest =
+      ::android::hardware::graphics::composer::hal::DisplayRequest;
 };
 using Transform = ::android::hardware::graphics::composer::hal::Transform;
 } // namespace Hwc2

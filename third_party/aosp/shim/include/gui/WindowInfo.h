@@ -4,9 +4,12 @@
 
 #include <binder/Binder.h>
 #include <cstdint>
+#include <gui/PidUid.h>
 #include <memory>
+#include <ui/LogicalDisplayId.h>
 #include <ui/Rect.h>
 #include <ui/Region.h>
+#include <ui/Size.h>
 #include <ui/Transform.h>
 #include <utils/RefBase.h>
 
@@ -37,6 +40,9 @@ struct WindowInfo {
     TOAST = 31,
     FIRST_APPLICATION_WINDOW = 1,
     LAST_APPLICATION_WINDOW = 99,
+    FIRST_SYSTEM_WINDOW = 2000,
+    ftl_first = FIRST_SYSTEM_WINDOW,
+    ftl_last = FIRST_SYSTEM_WINDOW + 15,
   };
   enum class InputConfig : uint32_t {
     NO_INPUT_CHANNEL = 1 << 0,
@@ -56,6 +62,8 @@ struct WindowInfo {
     CLONE = 1 << 14,
     GLOBAL_STYLUS_BLOCKS_TOUCH = 1 << 15,
     SENSITIVE_FOR_PRIVACY = 1 << 16,
+    DROP_INPUT = 1 << 17,
+    DROP_INPUT_IF_OBSCURED = 1 << 18,
   };
   struct InputConfigMask {
     uint32_t value = 0;
@@ -85,19 +93,22 @@ struct WindowInfo {
       return r;
     }
     bool any() const { return value != 0; }
+    std::string string() const { return std::to_string(value); }
   };
   sp<IBinder> token;
   std::string name;
   int32_t id = -1;
-  int32_t displayId = -1;
-  int32_t ownerPid = -1;
-  int32_t ownerUid = -1;
+  ui::LogicalDisplayId displayId = ui::LogicalDisplayId::INVALID;
+  Pid ownerPid = Pid::INVALID;
+  Uid ownerUid = Uid::INVALID;
   TouchOcclusionMode touchOcclusionMode = TouchOcclusionMode::BLOCK_UNTRUSTED;
   float alpha = 1.f;
   InputConfigMask inputConfig;
   int32_t layoutParamsFlags = 0;
   int32_t layoutParamsType = 0;
+  int32_t surfaceInset = 0;
   Rect frame;
+  ui::Size contentSize;
   Region touchableRegion;
   ui::Transform transform;
   sp<InputApplicationHandle> applicationInfo;
@@ -108,6 +119,20 @@ struct WindowInfo {
   bool paused = false;
   bool visible = true;
   bool trustedOverlay = false;
+  bool replaceTouchableRegionWithCrop = false;
+  bool canOccludePresentation = false;
+  wp<IBinder> touchableRegionCropHandle;
+
+  // AOSP real API — replay path only mutates mask bits.
+  void setInputConfig(InputConfigMask flags, bool value) {
+    if (value)
+      inputConfig.value |= flags.value;
+    else
+      inputConfig.value &= ~flags.value;
+  }
+  void setInputConfig(InputConfig flag, bool value) {
+    setInputConfig(InputConfigMask(flag), value);
+  }
 };
 
 class WindowInfoHandle : public RefBase {

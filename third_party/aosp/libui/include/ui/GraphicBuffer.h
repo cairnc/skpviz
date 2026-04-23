@@ -16,6 +16,7 @@
 #include <cstdint>
 #include <string>
 
+#include <android/hardware_buffer.h> // AHARDWAREBUFFER_USAGE_*
 #include <hardware/gralloc.h> // GRALLOC_USAGE_* — matches upstream include chain
 #include <ui/PixelFormat.h>
 #include <ui/Rect.h>

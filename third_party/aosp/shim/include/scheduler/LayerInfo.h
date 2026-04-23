@@ -1,58 +1,31 @@
-// LayerInfo shim — trace replay doesn't exercise SF's frame-rate scheduler;
-// stub just the nested types FE pulls in (FrameRate, FrameRateCategory,
-// FrameRateCompatibility, Seamlessness, FrameRateSelectionStrategy).
+// LayerInfo shim — FrameRate struct that FE uses as `Layer::FrameRate`.
+// Enums come verbatim from upstream headers:
+//   - scheduler/Fps.h  (Fps, FrameRateCategory)
+//   - Scheduler/FrameRateCompatibility.h (FrameRateCompatibility)
+//   - scheduler/Seamlessness.h (Seamlessness)
 #pragma once
 
+#include <Scheduler/FrameRateCompatibility.h>
 #include <cstdint>
-#include <string>
+#include <gui/PidUid.h>
+#include <map>
+#include <scheduler/Fps.h>
+#include <scheduler/Seamlessness.h>
+#include <ui/FenceTime.h>
 
-namespace android {
-
-// Minimal Fps wrapper — real Fps.h is extensive; FE only constructs Fps
-// and reads it back into FrameRateVote.
-class Fps {
-public:
-  constexpr Fps() = default;
-  explicit constexpr Fps(float v) : mValue(v) {}
-  static constexpr Fps fromValue(float v) { return Fps(v); }
-  float getValue() const { return mValue; }
-  bool operator==(const Fps &o) const { return mValue == o.mValue; }
-
-private:
-  float mValue = 0.f;
-};
-
-namespace scheduler {
-
-enum class Seamlessness : int32_t { Default, OnlySeamless, SeamedAndSeamless };
-enum class FrameRateCompatibility : int32_t {
-  Default,
-  Min,
-  Exact,
-  ExactOrMultiple,
-  NoVote,
-  Max,
-  Gte,
-  ftl_first = Default,
-  ftl_last = Gte
-};
-enum class FrameRateCategory : int32_t {
-  Default,
-  NoPreference,
-  Low,
-  Normal,
-  High,
-  HighHint
-};
+namespace android::scheduler {
 
 class LayerInfo {
 public:
-  enum class FrameRateSelectionStrategy : int32_t {
+  enum class FrameRateSelectionStrategy : uint32_t {
     Propagate,
     OverrideChildren,
     Self,
     ftl_last = Self,
   };
+  static FrameRateSelectionStrategy convertFrameRateSelectionStrategy(int8_t) {
+    return FrameRateSelectionStrategy::Propagate;
+  }
 
   struct FrameRate {
     struct FrameRateVote {
@@ -61,7 +34,7 @@ public:
       Seamlessness seamlessness = Seamlessness::Default;
 
       bool operator==(const FrameRateVote &o) const {
-        return rate == o.rate && type == o.type &&
+        return rate.getValue() == o.rate.getValue() && type == o.type &&
                seamlessness == o.seamlessness;
       }
       FrameRateVote() = default;
@@ -85,9 +58,8 @@ public:
     }
     bool isValid() const { return true; }
 
-    // HAL-int → enum converters. The real Layer has these branching on
-    // named HAL constants; layerviewer collapses them to Default since
-    // we don't drive SF's frame-rate scheduler.
+    // HAL-int → enum converters — replay path doesn't need the real
+    // mapping, collapse to Default.
     static FrameRateCompatibility convertCompatibility(int8_t) {
       return FrameRateCompatibility::Default;
     }
@@ -100,5 +72,4 @@ public:
   };
 };
 
-} // namespace scheduler
-} // namespace android
+} // namespace android::scheduler

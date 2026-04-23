@@ -25,4 +25,11 @@ struct CallbackId {
 };
 struct ListenerCallbacks {};
 
+// Hash functor for sp<IBinder> keys (used by TransactionHandler).
+struct IListenerHash {
+  size_t operator()(const sp<IBinder> &ptr) const {
+    return std::hash<IBinder *>{}(ptr.get());
+  }
+};
+
 } // namespace android

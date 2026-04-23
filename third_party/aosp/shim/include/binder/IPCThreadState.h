@@ -1,6 +1,7 @@
 // IPCThreadState shim — FE reads calling pid/uid; in offline replay both
 // come from the trace, not from the current thread. Return 0 (AID_ROOT).
 #pragma once
+#include <sstream> // FE transitively expects std::stringstream through this
 #include <sys/types.h>
 
 namespace android {

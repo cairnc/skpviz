@@ -1,8 +1,11 @@
 // ISurfaceComposer shim — FE references ISurfaceComposer::eAnimation and
-// ISurfaceComposerClient::e* flags.
+// ISurfaceComposerClient::e* flags. Real upstream also surfaces gui::
+// FrameTimelineInfo + utils::Vector from this header, so mirror those.
 #pragma once
+#include <android/gui/FrameTimelineInfo.h>
 #include <binder/Binder.h>
 #include <cstdint>
+#include <utils/Vector.h>
 namespace android {
 class ISurfaceComposer : public IBinder {
 public:
@@ -40,4 +43,5 @@ public:
 // the unqualified form.
 namespace android {
 using ISurfaceComposerClient = ::android::gui::ISurfaceComposerClient;
-}
+using gui::FrameTimelineInfo;
+} // namespace android

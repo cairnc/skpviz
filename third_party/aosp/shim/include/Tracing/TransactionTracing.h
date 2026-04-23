@@ -1,7 +1,9 @@
-// TransactionTracing shim — only the global TransactionTraceWriter singleton
-// is referenced (enable/disable). FE's "fatal error trace" hook becomes a
-// no-op in layerviewer.
+// TransactionTracing shim — FE's LayerLog.h reaches this header for the
+// global TransactionTraceWriter + SFTRACE_NAME + FlagManager + __predict_false
+// macros, so consolidate all of them into the transitive chain here.
 #pragma once
+#include <common/trace.h>
+#include <string>
 
 namespace android {
 
@@ -13,6 +15,8 @@ public:
   }
   void enable() {}
   void disable() {}
+  void invoke(const std::string & /*prefix*/, bool /*overwrite*/) {}
+  void invokeForTest(const std::string & /*filename*/, bool /*overwrite*/) {}
 };
 
 } // namespace android
