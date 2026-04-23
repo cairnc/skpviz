@@ -1,18 +1,25 @@
-// GrAHardwareBufferUtils shim. Upstream Skia defines this only on Android
-// builds (where it bridges AHardwareBuffer ↔ Ganesh textures). Outside
-// Android we never have real AHBs, so expose only the callback typedefs and
-// the format-→-color-type mapping that SF port code *declares* but doesn't
-// exercise at runtime.
+// GrAHardwareBufferUtils shim. Upstream Skia's Android build imports AHBs by
+// creating EGLImages; our GraphicBuffer stores the texture directly, so
+// MakeGLBackendTexture just reads mTextureId off our GraphicBuffer and wraps
+// it with GrBackendTextures::MakeGL.
+
 #pragma once
 
 #include <include/core/SkColorType.h>
 #include <include/core/SkImageInfo.h>
 #include <include/gpu/ganesh/GrBackendSurface.h>
+#include <include/gpu/ganesh/gl/GrGLBackendSurface.h>
+#include <include/gpu/ganesh/gl/GrGLTypes.h>
 
 #include <android/hardware_buffer.h>
 #include <cstdint>
 
 class GrDirectContext;
+
+// Include our GraphicBuffer so we can reach into it for the GL texture name.
+// Included unqualified (matching layerviewer's libui include root).
+#include <ui/GraphicBuffer.h>
+#include <ui/PixelFormat.h>
 
 namespace GrAHardwareBufferUtils {
 
@@ -21,7 +28,6 @@ using DeleteImageProc = void (*)(void *);
 using UpdateImageProc = void (*)(void *, GrDirectContext *);
 
 inline SkColorType GetSkColorTypeFromBufferFormat(uint32_t format) {
-  // Mirror the AOSP-side mapping, minus HDR formats we don't use.
   switch (format) {
   case 1: /* RGBA_8888 */
     return kRGBA_8888_SkColorType;
@@ -42,27 +48,49 @@ inline SkColorType GetSkColorTypeFromBufferFormat(uint32_t format) {
   }
 }
 
-inline GrBackendFormat GetGLBackendFormat(GrDirectContext *, uint32_t,
+inline GrBackendFormat GetGLBackendFormat(GrDirectContext *,
+                                          uint32_t /*format*/,
                                           bool /*requireKnownFormat*/) {
-  // Real impl queries GL_TEXTURE_EXTERNAL / GL_TEXTURE_2D formats. We never
-  // materialize real AHBs — return an invalid format; callers guard on
-  // validity or skip in our paths.
-  return {};
+  // Our textures are always GL_RGBA8 regardless of the requested format —
+  // the color mapping happens in Skia during draw. Returning a known format
+  // keeps AutoBackendTexture happy.
+  return GrBackendFormats::MakeGL(0x8058 /*GL_RGBA8*/,
+                                  0x0DE1 /*GL_TEXTURE_2D*/);
 }
 
 inline GrBackendTexture
-MakeGLBackendTexture(GrDirectContext *, AHardwareBuffer *, int /*width*/,
-                     int /*height*/, DeleteImageProc *outDelete,
+MakeGLBackendTexture(GrDirectContext *, AHardwareBuffer *buffer, int width,
+                     int height, DeleteImageProc *outDelete,
                      UpdateImageProc *outUpdate, TexImageCtx *outCtx,
                      bool /*isProtectedContent*/, const GrBackendFormat &,
                      bool /*isRenderable*/) {
   if (outDelete)
-    *outDelete = nullptr;
+    *outDelete = [](void *) {};
   if (outUpdate)
-    *outUpdate = nullptr;
+    *outUpdate = [](void *, GrDirectContext *) {};
   if (outCtx)
     *outCtx = nullptr;
-  return {};
+
+  auto *gb = android::GraphicBuffer::fromAHardwareBuffer(buffer);
+  if (!gb)
+    return {};
+
+  // Allocate the texture on-demand — RE's AutoBackendTexture creates the
+  // backend texture before making an SkSurface/SkImage from it, and the GL
+  // context is current for all of that.
+  unsigned int texId = gb->getOrCreateGLTexture();
+  if (!texId)
+    return {};
+
+  GrGLTextureInfo info;
+  info.fTarget = 0x0DE1; // GL_TEXTURE_2D
+  info.fID = texId;
+  info.fFormat = 0x8058; // GL_RGBA8
+  info.fProtected = skgpu::Protected::kNo;
+
+  return GrBackendTextures::MakeGL(width ? width : (int)gb->getWidth(),
+                                   height ? height : (int)gb->getHeight(),
+                                   skgpu::Mipmapped::kNo, info);
 }
 
 // Vulkan variants declared to satisfy call sites in Vk branches (never taken

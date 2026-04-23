@@ -1,12 +1,15 @@
-// Minimal GraphicBuffer for layerviewer — not a real AOSP port.
+// GraphicBuffer — minimal, GL-backed, layerviewer-specific.
 //
-// Real AOSP GraphicBuffer wraps an AHardwareBuffer + ANativeWindowBuffer and
-// crosses binder via Flattenable. We replace it with a thin RefBase-derived
-// object owning a GL texture (created lazily on first bind). Only the methods
-// ported SurfaceFlinger/RenderEngine code actually calls are implemented.
+// On Android, GraphicBuffer is literally AHardwareBuffer with compat shims on
+// top. AHB abstracts gralloc-allocated, EGLImage-imported GPU buffers that
+// RenderEngine imports as GL textures via GrAHardwareBufferUtils::
+// MakeGLBackendTexture().
 //
-// Buffers intended for RenderEngine to write into use USAGE_HW_RENDER and get
-// an FBO attached for render-to-texture; sampled buffers use USAGE_HW_TEXTURE.
+// For layerviewer we skip the gralloc/EGLImage dance and back each
+// GraphicBuffer directly with a GL 2D texture (created lazily the first time
+// RE asks for a backend texture). toAHardwareBuffer() casts `this` to the
+// opaque AHB pointer; our shim GrAHardwareBufferUtils casts it back to reach
+// mTextureId. Imports and exports are reinterpret_casts.
 
 #pragma once
 
@@ -17,9 +20,9 @@
 #include <ui/Rect.h>
 #include <utils/RefBase.h>
 
-// AHardwareBuffer is Android's opaque handle type. We forward-declare it as
-// the same name so sp<GraphicBuffer>::toAHardwareBuffer() signatures match
-// (we return nullptr in the stub, since we don't import real buffers).
+// AHB is an opaque forward-declared struct throughout the Android headers we
+// port; we reinterpret_cast between AHardwareBuffer* and GraphicBuffer* inside
+// our shim.
 extern "C" {
 typedef struct AHardwareBuffer AHardwareBuffer;
 }
@@ -48,6 +51,7 @@ public:
         mUsage(usage), mRequestor(std::move(requestorName)) {
     mId = sNextId++;
   }
+  ~GraphicBuffer() override; // defined in GraphicBuffer.cpp; frees GL tex
 
   uint32_t getWidth() const { return mWidth; }
   uint32_t getHeight() const { return mHeight; }
@@ -60,18 +64,31 @@ public:
   status_t initCheck() const { return OK; }
   const std::string &getRequestorName() const { return mRequestor; }
 
-  // Gralloc handle accessors; stubbed out.
+  // Gralloc handle accessors; stubbed out (no real gralloc).
   const struct native_handle *handle = nullptr;
 
-  // No real AHB import yet — RenderEngine only calls this for external
-  // content which we don't have in a trace-driven context.
-  AHardwareBuffer *toAHardwareBuffer() { return nullptr; }
-  const AHardwareBuffer *toAHardwareBuffer() const { return nullptr; }
-  static GraphicBuffer *fromAHardwareBuffer(AHardwareBuffer *) {
-    return nullptr;
+  // GL texture name. Allocated on first call; subsequent calls return the
+  // same id. The current GL context must be current when this is called.
+  unsigned int getOrCreateGLTexture();
+  unsigned int getGLTextureIfAny() const { return mTextureId; }
+
+  // GraphicBuffer IS AHardwareBuffer on Android (AHB is the public
+  // type alias for the same gralloc handle). Our GraphicBuffer isn't
+  // layout-compatible with the ANativeWindowBuffer+AHB base struct, but
+  // since nothing in our port dereferences the AHB* — it's only ever
+  // passed back into GrAHardwareBufferUtils (which we own) — an opaque
+  // round-trip via reinterpret_cast is enough.
+  AHardwareBuffer *toAHardwareBuffer() {
+    return reinterpret_cast<AHardwareBuffer *>(this);
   }
-  static const GraphicBuffer *fromAHardwareBuffer(const AHardwareBuffer *) {
-    return nullptr;
+  const AHardwareBuffer *toAHardwareBuffer() const {
+    return reinterpret_cast<const AHardwareBuffer *>(this);
+  }
+  static GraphicBuffer *fromAHardwareBuffer(AHardwareBuffer *ahb) {
+    return reinterpret_cast<GraphicBuffer *>(ahb);
+  }
+  static const GraphicBuffer *fromAHardwareBuffer(const AHardwareBuffer *ahb) {
+    return reinterpret_cast<const GraphicBuffer *>(ahb);
   }
 
 private:
@@ -83,6 +100,7 @@ private:
   uint64_t mUsage = 0;
   uint64_t mId = 0;
   std::string mRequestor;
+  unsigned int mTextureId = 0; // GLuint
 };
 
 } // namespace android
