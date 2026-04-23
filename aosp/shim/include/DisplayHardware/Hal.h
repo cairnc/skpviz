@@ -61,6 +61,19 @@ using HWDisplayId = uint64_t;
 using HWLayerId = uint64_t;
 using HWConfigId = uint32_t;
 
+// HIDL generated these as free-function stringifiers; replicate so CE
+// source code can call to_string(Error) / toString(Transform) unchanged.
+inline std::string to_string(Error e) {
+  return "Error(" + std::to_string(static_cast<int32_t>(e)) + ")";
+}
+inline std::string toString(Error e) { return to_string(e); }
+inline std::string toString(LayerRequest r) {
+  return "LayerRequest(" + std::to_string(static_cast<int32_t>(r)) + ")";
+}
+inline std::string toString(DisplayRequest r) {
+  return "DisplayRequest(" + std::to_string(static_cast<int32_t>(r)) + ")";
+}
+
 struct DisplayIdentification_t {
   uint8_t port = 0;
   std::vector<uint8_t> data;

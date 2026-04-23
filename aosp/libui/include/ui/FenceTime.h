@@ -2,6 +2,7 @@
 // All our fences are pre-signaled, so FenceTime is a no-op wrapper.
 #pragma once
 
+#include <scheduler/interface/ICompositor.h> // TimePoint — CE headers use it
 #include <ui/Fence.h>
 #include <utils/RefBase.h>
 

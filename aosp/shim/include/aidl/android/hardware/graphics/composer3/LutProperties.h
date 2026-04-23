@@ -1,4 +1,3 @@
-// LutProperties AIDL stub — SF's LutShader references these.
 #pragma once
 #include <cstdint>
 #include <string>
@@ -13,7 +12,7 @@ struct LutProperties {
     MAX_RGB = 1,
     CIE_Y = 2,
   };
-  int32_t dimension = 0;
+  Dimension dimension = Dimension::ONE_D;
   int32_t size = 0;
   std::vector<SamplingKey> samplingKeys;
 };

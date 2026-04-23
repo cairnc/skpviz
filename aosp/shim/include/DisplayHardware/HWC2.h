@@ -5,16 +5,19 @@
 #include "Hal.h"
 #include <aidl/android/hardware/graphics/composer3/Color.h>
 #include <aidl/android/hardware/graphics/composer3/Luts.h>
+#include <android/binder_auto_utils.h>
 #include <cstdint>
 #include <cutils/native_handle.h>
 #include <gui/HdrMetadata.h>
 #include <math/mat4.h>
+#include <string>
 #include <ui/FloatRect.h>
 #include <ui/GraphicTypes.h>
 #include <ui/PictureProfileHandle.h>
 #include <ui/Rect.h>
 #include <ui/Region.h>
 #include <utils/RefBase.h>
+#include <vector>
 
 namespace android {
 
@@ -23,6 +26,13 @@ namespace Hwc2 {
 // work where needed; we never actually call through to a real HAL composer.
 class Composer {
 public:
+  struct DisplayBrightnessOptions {
+    bool applyImmediately = false;
+  };
+  struct LayerGenericMetadataKey {
+    std::string name;
+    bool mandatory = false;
+  };
   virtual ~Composer() = default;
 };
 class IComposerClient {
@@ -34,28 +44,9 @@ public:
 using Transform = ::android::hardware::graphics::composer::hal::Transform;
 } // namespace Hwc2
 
-// ndk::ScopedAStatus / ScopedFileDescriptor are the binder wrappers; stubs.
-namespace ndk {
-class ScopedAStatus {
-public:
-  ScopedAStatus() = default;
-  bool isOk() const { return true; }
-};
-class ScopedFileDescriptor {
-public:
-  ScopedFileDescriptor() = default;
-  explicit ScopedFileDescriptor(int fd) : mFd(fd) {}
-  int get() const { return mFd; }
-  int release() {
-    int f = mFd;
-    mFd = -1;
-    return f;
-  }
-
-private:
-  int mFd = -1;
-};
-} // namespace ndk
+// ndk::ScopedAStatus / ScopedFileDescriptor live in
+// <android/binder_auto_utils.h> — separated so Luts.h can include them without
+// a cycle through HWC2.h.
 
 class GraphicBuffer;
 class Fence;
@@ -109,6 +100,15 @@ public:
     return Error::NONE;
   }
   Error setPictureProfileHandle(const PictureProfileHandle &) {
+    return Error::NONE;
+  }
+  Error setLayerGenericMetadata(const std::string & /*name*/,
+                                bool /*mandatory*/,
+                                const std::vector<uint8_t> & /*value*/) {
+    return Error::NONE;
+  }
+  Error setBufferSlotsToClear(const std::vector<uint32_t> & /*slots*/,
+                              uint32_t /*activeBufferSlot*/) {
     return Error::NONE;
   }
 };

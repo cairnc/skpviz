@@ -2,6 +2,7 @@
 // Any SF code path guarded by a flag stays on its default-off branch.
 #pragma once
 
+#include <cutils/compiler.h>
 #include <string>
 
 namespace android {

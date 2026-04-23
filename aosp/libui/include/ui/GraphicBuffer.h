@@ -71,6 +71,12 @@ public:
   // Gralloc handle accessors; stubbed out (no real gralloc).
   const struct native_handle *handle = nullptr;
 
+  // ANativeWindowBuffer facade — real AOSP has GraphicBuffer inherit from
+  // ANativeObjectBase<ANativeWindowBuffer,...>. Our stub returns nullptr
+  // since RenderSurface.cpp paths aren't actually exercised.
+  struct ANativeWindowBuffer *getNativeBuffer() const { return nullptr; }
+  static GraphicBuffer *from(struct ANativeWindowBuffer *) { return nullptr; }
+
   // GL texture name. Allocated on first call; subsequent calls return the
   // same id. The current GL context must be current when this is called.
   unsigned int getOrCreateGLTexture();

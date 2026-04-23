@@ -1,6 +1,7 @@
 // HIDL graphics/common@1.0 types shim. Values mirror the real HAL enums.
 #pragma once
 #include <cstdint>
+#include <string>
 namespace android::hardware::graphics::common::V1_0 {
 
 enum class PixelFormat : int32_t {
@@ -121,5 +122,28 @@ enum class Transform : int32_t {
   ROT_180 = 0x03,
   ROT_270 = 0x07,
 };
+
+// HIDL-generated toString + operators for the Transform enum class, used by
+// OutputLayer printing and HWC bit-ops.
+inline std::string toString(Transform t) {
+  return "Transform(" + std::to_string(static_cast<int32_t>(t)) + ")";
+}
+inline constexpr Transform operator|(Transform a, Transform b) {
+  return static_cast<Transform>(static_cast<int32_t>(a) |
+                                static_cast<int32_t>(b));
+}
+inline constexpr int32_t operator|(Transform a, int32_t b) {
+  return static_cast<int32_t>(a) | b;
+}
+inline constexpr int32_t operator|(int32_t a, Transform b) {
+  return a | static_cast<int32_t>(b);
+}
+inline constexpr Transform operator&(Transform a, Transform b) {
+  return static_cast<Transform>(static_cast<int32_t>(a) &
+                                static_cast<int32_t>(b));
+}
+inline constexpr int32_t operator&(Transform a, int32_t b) {
+  return static_cast<int32_t>(a) & b;
+}
 
 } // namespace android::hardware::graphics::common::V1_0

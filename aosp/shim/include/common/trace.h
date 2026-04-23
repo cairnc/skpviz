@@ -1,5 +1,9 @@
-// SF-internal trace wrapper; forward everything to ATRACE no-ops.
+// SF-internal trace wrapper. Layerviewer code often reaches for CC_LIKELY /
+// CC_UNLIKELY and FlagManager alongside tracing; include them here so the
+// transitive surface matches real AOSP without editing CE sources.
 #pragma once
+#include <common/FlagManager.h>
+#include <cutils/compiler.h>
 #include <cutils/trace.h>
 
 #define SFTRACE_ENABLED() 0

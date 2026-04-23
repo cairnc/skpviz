@@ -1,67 +1,95 @@
-// SF scheduler ICompositor shim — CE's CompositionRefreshArgs.h references it
-// for timing fields only.
+// SF scheduler interface shim — CE references a few types in this header.
+// Matching real AOSP's shape: TimePoint inherits from steady_clock::time_point,
+// Duration inherits from TimePoint::duration, Period aliases Duration.
 #pragma once
+
 #include <chrono>
+#include <cstdint>
+#include <ftl/optional.h>
+#include <ui/DisplayId.h>
+#include <ui/DisplayMap.h>
+#include <utils/Timers.h> // nsecs_t
 
 namespace android {
 
-// AOSP's scheduler uses a TimePoint class (not a bare
-// std::chrono::time_point). SF code calls TimePoint::now(), min operators,
-// and conversion to the underlying std::chrono::time_point. Keep a
-// derived-like wrapper that round-trips.
-class TimePoint {
-public:
-  using duration = std::chrono::nanoseconds;
-  using clock = std::chrono::steady_clock;
-  using std_time_point = clock::time_point;
+namespace scheduler {
+using SchedulerClock = std::chrono::steady_clock;
+} // namespace scheduler
 
+struct Duration;
+
+struct TimePoint : scheduler::SchedulerClock::time_point {
   constexpr TimePoint() = default;
-  constexpr TimePoint(std_time_point tp) : mTp(tp) {}
-  explicit constexpr TimePoint(duration d) : mTp(std_time_point(d)) {}
+  explicit constexpr TimePoint(const Duration &);
+  constexpr TimePoint(scheduler::SchedulerClock::time_point p)
+      : scheduler::SchedulerClock::time_point(p) {}
 
-  static TimePoint now() { return TimePoint(clock::now()); }
-  static TimePoint fromNs(int64_t ns) { return TimePoint(duration(ns)); }
-  int64_t ns() const {
-    return std::chrono::duration_cast<duration>(mTp.time_since_epoch()).count();
-  }
-  constexpr operator std_time_point() const { return mTp; }
-  constexpr bool operator<(const TimePoint &o) const { return mTp < o.mTp; }
-  constexpr bool operator>(const TimePoint &o) const { return mTp > o.mTp; }
-  constexpr bool operator==(const TimePoint &o) const { return mTp == o.mTp; }
-  constexpr bool operator!=(const TimePoint &o) const { return mTp != o.mTp; }
-  constexpr TimePoint operator+(duration d) const { return TimePoint(mTp + d); }
-  constexpr duration operator-(TimePoint o) const { return mTp - o.mTp; }
+  static constexpr TimePoint fromNs(nsecs_t);
+  static TimePoint now() { return scheduler::SchedulerClock::now(); }
 
-private:
-  std_time_point mTp{};
+  nsecs_t ns() const;
 };
 
-using Period = std::chrono::nanoseconds;
+struct Duration : TimePoint::duration {
+  constexpr Duration() = default;
+  template <typename R, typename P>
+  constexpr Duration(std::chrono::duration<R, P> d) : TimePoint::duration(d) {}
+
+  static constexpr Duration fromNs(nsecs_t ns) {
+    return Duration(std::chrono::nanoseconds(ns));
+  }
+
+  nsecs_t ns() const { return std::chrono::nanoseconds(*this).count(); }
+};
+
+using Period = Duration;
+
+constexpr TimePoint::TimePoint(const Duration &d)
+    : scheduler::SchedulerClock::time_point(d) {}
+
+constexpr TimePoint TimePoint::fromNs(nsecs_t ns) {
+  return TimePoint(Duration::fromNs(ns));
+}
+
+inline nsecs_t TimePoint::ns() const {
+  return Duration(time_since_epoch()).ns();
+}
+
+// Duration → numeric ticks helper.
+template <typename P, typename Rep = Duration::rep>
+constexpr Rep ticks(Duration d) {
+  using D = std::chrono::duration<Rep, P>;
+  return std::chrono::duration_cast<D>(d).count();
+}
+
 namespace compositionengine {
+using ::android::Duration;
 using ::android::Period;
 using ::android::TimePoint;
 } // namespace compositionengine
-} // namespace android
 
-namespace android::scheduler {
+namespace scheduler {
 using TimePoint = ::android::TimePoint;
+using Duration = ::android::Duration;
 using Period = ::android::Period;
 
 class FrameTarget {
 public:
   TimePoint expectedPresentTime() const { return {}; }
   TimePoint earliestPresentTime() const { return {}; }
+  std::optional<TimePoint> debugPresentDelay() const { return std::nullopt; }
   int64_t frameId() const { return 0; }
   Period frameInterval() const { return {}; }
   bool wouldBackpressureHwc() const { return false; }
 };
-class FrameTargets {
-public:
-  const FrameTarget *get(int32_t /*displayId*/) const { return nullptr; }
-};
+
+using FrameTargets =
+    ui::PhysicalDisplayMap<PhysicalDisplayId, const FrameTarget *>;
 
 class ICompositor {
 public:
   virtual ~ICompositor() = default;
 };
-} // namespace android::scheduler
+} // namespace scheduler
+
+} // namespace android

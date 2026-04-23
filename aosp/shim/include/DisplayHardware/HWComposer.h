@@ -1,8 +1,7 @@
 // HWComposer shim. Layerviewer has no HWC backing — every layer is composed
-// via RenderEngine (CLIENT composition). Every method fatal-stubs (for ones
-// that shouldn't be called on our CLIENT-only path) or returns a neutral
-// "no changes" response. Enough structure to satisfy CompositionEngine's
-// compile-time references.
+// via RenderEngine (CLIENT composition). Method signatures match AOSP CE's
+// call sites so CE compiles unchanged; bodies return neutral "no changes"
+// responses that drive CE down its CLIENT path.
 
 #pragma once
 
@@ -22,6 +21,7 @@
 #include <aidl/android/hardware/graphics/composer3/OutputType.h>
 #include <aidl/android/hardware/graphics/composer3/OverlayProperties.h>
 
+#include <future>
 #include <log/log.h>
 #include <math/mat4.h>
 #include <ui/DisplayIdentification.h>
@@ -31,20 +31,17 @@
 #include <utils/StrongPointer.h>
 #include <utils/Timers.h>
 
-// Minimal Fps shim — CE passes this to getDeviceCompositionChanges but the
-// stub never uses it. A one-field struct keeps signatures correct.
-namespace android {
-struct Fps {
-  float value = 60.f;
-};
-} // namespace android
-
 #include <optional>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
 
 namespace android {
+
+// Minimal Fps stand-in.
+struct Fps {
+  float value = 60.f;
+};
 
 class Fence;
 class GraphicBuffer;
@@ -61,15 +58,24 @@ public:
         ClientTargetPropertyWithBrightness;
     using DisplayRequests = hal::DisplayRequest;
     using LayerRequests = std::unordered_map<HWC2::Layer *, hal::LayerRequest>;
-    using LayerLuts = std::unordered_map<
-        HWC2::Layer *,
-        aidl::android::hardware::graphics::composer3::LutProperties>;
+    using LutOffsetAndProperties = std::vector<std::pair<
+        int32_t, aidl::android::hardware::graphics::composer3::LutProperties>>;
+    using LayerLuts = std::unordered_map<HWC2::Layer *, LutOffsetAndProperties>;
     ChangedTypes changedTypes;
     DisplayRequests displayRequests{};
     LayerRequests layerRequests;
     ClientTargetProperty clientTargetProperty{};
     LayerLuts layerLuts;
+
+    // Real AOSP compares two DeviceRequestedChanges for equality to
+    // decide whether HWC's choice changed since last frame; our stub
+    // always produces nullopt so this is only touched if CE gets there.
+    bool operator==(const DeviceRequestedChanges &) const { return true; }
   };
+
+  // Map returned by getLutFileDescriptorMapper — fd per HWC layer.
+  using LutFileDescriptorMap =
+      std::unordered_map<HWC2::Layer *, ndk::ScopedFileDescriptor>;
 
   // === Methods CE actually calls (stubbed) ===
   void clearReleaseFences(HalDisplayId) {}
@@ -82,8 +88,7 @@ public:
   // layer. This is the core of the layerviewer HWC-stub strategy.
   status_t getDeviceCompositionChanges(
       HalDisplayId, bool /*frameUsesClientComposition*/,
-      std::chrono::steady_clock::time_point /*earliestPresentTime*/,
-      const sp<Fence> & /*previousPresentFence*/,
+      const std::optional<TimePoint> & /*earliestPresentTime*/,
       nsecs_t /*expectedPresentTime*/, Fps /*frameInterval*/,
       std::optional<DeviceRequestedChanges> *outChanges) {
     if (outChanges)
@@ -92,15 +97,10 @@ public:
   }
 
   sp<Fence> getLayerReleaseFence(HalDisplayId, HWC2::Layer *);
-  const std::unordered_map<
-      HWC2::Layer *,
-      aidl::android::hardware::graphics::composer3::LutProperties> &
-  getLutFileDescriptorMapper() const;
-  std::optional<aidl::android::hardware::graphics::composer3::OverlayProperties>
-  getOverlaySupport() const {
-    return std::nullopt;
-  }
-  sp<Fence> getPresentFence(HalDisplayId);
+  LutFileDescriptorMap &getLutFileDescriptorMapper();
+  const aidl::android::hardware::graphics::composer3::OverlayProperties &
+  getOverlaySupport() const;
+  sp<Fence> getPresentFence(HalDisplayId) const;
   bool getValidateSkipped(HalDisplayId) const { return true; }
   bool hasCapability(
       aidl::android::hardware::graphics::composer3::Capability) const {
@@ -112,19 +112,21 @@ public:
     return false;
   }
   status_t presentAndGetReleaseFences(HalDisplayId,
-                                      std::chrono::steady_clock::time_point,
-                                      const sp<Fence> &) {
+                                      const std::optional<TimePoint> &) {
     return OK;
   }
   void reset() {}
-  status_t setActiveColorMode(
-      HalDisplayId, ui::ColorMode,
-      aidl::android::hardware::graphics::composer3::RenderIntent) {
+  status_t setActiveColorMode(HalDisplayId, ui::ColorMode, ui::RenderIntent) {
     return OK;
   }
   status_t setColorTransform(HalDisplayId, const mat4 &) { return OK; }
-  status_t setDisplayBrightness(HalDisplayId, float, float, void *) {
-    return OK;
+  // CE calls `.get()` on the return — return a std::future<status_t>.
+  std::future<status_t>
+  setDisplayBrightness(HalDisplayId, float, float,
+                       Hwc2::Composer::DisplayBrightnessOptions) {
+    std::promise<status_t> p;
+    p.set_value(OK);
+    return p.get_future();
   }
   status_t setDisplayPictureProfileHandle(HalDisplayId,
                                           const PictureProfileHandle &) {

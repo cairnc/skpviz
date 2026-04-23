@@ -15,4 +15,5 @@ enum class Composition : int32_t {
 inline std::string toString(Composition v) {
   return "Composition(" + std::to_string(static_cast<int32_t>(v)) + ")";
 }
+inline std::string to_string(Composition v) { return toString(v); }
 } // namespace aidl::android::hardware::graphics::composer3

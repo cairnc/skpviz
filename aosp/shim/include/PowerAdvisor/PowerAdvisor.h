@@ -1,4 +1,6 @@
-// PowerAdvisor shim — SF uses this to hint the CPU/GPU scheduler. No-op.
+// PowerAdvisor shim — SF uses this to hint the CPU/GPU scheduler. All calls
+// no-op because layerviewer isn't running the real SF scheduler; we just
+// render whatever frame the user scrubs to.
 #pragma once
 #include <cstdint>
 #include <memory>
@@ -8,7 +10,6 @@
 #include <vector>
 
 namespace android::adpf {
-
 class PowerAdvisor {
 public:
   virtual ~PowerAdvisor() = default;
@@ -26,6 +27,7 @@ public:
   virtual void setGpuFenceTime(DisplayId, std::unique_ptr<FenceTime> &&) {}
   virtual void setHintSessionThreadIds(const std::vector<int32_t> &) {}
   virtual void setRequiresRenderEngine(DisplayId, bool) {}
+  virtual void setExpensiveRenderingExpected(DisplayId, bool) {}
   virtual void reportActualWorkDuration() {}
   virtual void enablePowerHintSession(bool) {}
   virtual bool startPowerHintSession(std::vector<int32_t>) { return false; }
@@ -33,5 +35,4 @@ public:
   virtual bool supportsPowerHintSession() { return false; }
   virtual bool supportsGpuReporting() { return false; }
 };
-
 } // namespace android::adpf
