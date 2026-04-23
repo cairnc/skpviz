@@ -109,7 +109,28 @@ namespace android::hardware::graphics::common::V1_1 {
 inline void PrintTo(const RenderIntent &r, ::std::ostream *os) {
   *os << "RenderIntent(" << static_cast<int32_t>(r) << ")";
 }
+inline std::string toString(RenderIntent r) {
+  return "RenderIntent(" + std::to_string(static_cast<int32_t>(r)) + ")";
+}
 } // namespace android::hardware::graphics::common::V1_1
+
+namespace android::hardware::graphics::common::V1_2 {
+inline std::string toString(Dataspace d) {
+  return "Dataspace(" + std::to_string(static_cast<int32_t>(d)) + ")";
+}
+inline std::string toString(PixelFormat p) {
+  return "PixelFormat(" + std::to_string(static_cast<int32_t>(p)) + ")";
+}
+inline std::string toString(ColorMode c) {
+  return "ColorMode(" + std::to_string(static_cast<int32_t>(c)) + ")";
+}
+} // namespace android::hardware::graphics::common::V1_2
+namespace android::gui {
+enum class CachingHint : int32_t; // from <android/gui/CachingHint.h>
+inline std::string toString(CachingHint c) {
+  return "CachingHint(" + std::to_string(static_cast<int32_t>(c)) + ")";
+}
+} // namespace android::gui
 
 // AIDL enum stubs need toString(Enum) → std::string so SF port code can call
 // `aidl::...::toString(enum_value)`. Defined as free functions in each AIDL

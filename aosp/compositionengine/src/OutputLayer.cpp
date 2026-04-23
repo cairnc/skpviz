@@ -29,7 +29,9 @@
 #include <ui/FloatRect.h>
 #include <ui/HdrRenderTypeUtils.h>
 
+#include <DisplayHardware/HWC2.h>
 #include <com_android_graphics_libgui_flags.h>
+#include <common/FlagManager.h>
 
 // TODO(b/129481165): remove the #pragma below and fix conversion issues
 #pragma clang diagnostic push

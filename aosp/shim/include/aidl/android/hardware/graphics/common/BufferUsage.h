@@ -1,0 +1,31 @@
+#pragma once
+#include <cstdint>
+namespace aidl::android::hardware::graphics::common {
+enum class BufferUsage : int64_t {
+  CPU_READ_NEVER = 0,
+  CPU_READ_RARELY = 2,
+  CPU_READ_OFTEN = 3,
+  CPU_WRITE_NEVER = 0,
+  CPU_WRITE_RARELY = 2 << 4,
+  CPU_WRITE_OFTEN = 3 << 4,
+  GPU_TEXTURE = 1LL << 8,
+  GPU_RENDER_TARGET = 1LL << 9,
+  COMPOSER_OVERLAY = 1LL << 11,
+  COMPOSER_CLIENT_TARGET = 1LL << 12,
+  PROTECTED = 1LL << 14,
+  COMPOSER_CURSOR = 1LL << 15,
+  VIDEO_ENCODER = 1LL << 16,
+  CAMERA_OUTPUT = 1LL << 17,
+  CAMERA_INPUT = 1LL << 18,
+  RENDERSCRIPT = 1LL << 20,
+  VIDEO_DECODER = 1LL << 22,
+  SENSOR_DIRECT_DATA = 1LL << 23,
+  GPU_DATA_BUFFER = 1LL << 24,
+  GPU_CUBE_MAP = 1LL << 25,
+  GPU_MIPMAP_COMPLETE = 1LL << 26,
+  HW_IMAGE_ENCODER = 1LL << 27,
+  FRONT_BUFFER = 1LL << 32,
+  VENDOR_MASK = 0xFLL << 28,
+  VENDOR_MASK_HI = 0xFFFFLL << 48,
+};
+}

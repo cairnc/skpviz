@@ -23,6 +23,7 @@
 #include <gui/HdrMetadata.h>
 #include <math/mat4.h>
 #include <ui/BlurRegion.h>
+#include <ui/Fence.h>
 #include <ui/FloatRect.h>
 #include <ui/LayerStack.h>
 #include <ui/PictureProfileHandle.h>
@@ -30,6 +31,7 @@
 #include <ui/Region.h>
 #include <ui/ShadowSettings.h>
 #include <ui/Transform.h>
+#include <utils/NativeHandle.h>
 
 // TODO(b/129481165): remove the #pragma below and fix conversion issues
 #pragma clang diagnostic push

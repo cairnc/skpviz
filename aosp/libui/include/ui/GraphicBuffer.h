@@ -63,6 +63,10 @@ public:
   uint64_t getUniqueId() const { return mId; }
   status_t initCheck() const { return OK; }
   const std::string &getRequestorName() const { return mRequestor; }
+  Rect getBounds() const {
+    return Rect(0, 0, static_cast<int32_t>(mWidth),
+                static_cast<int32_t>(mHeight));
+  }
 
   // Gralloc handle accessors; stubbed out (no real gralloc).
   const struct native_handle *handle = nullptr;

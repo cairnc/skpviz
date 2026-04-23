@@ -16,6 +16,7 @@
 
 #include <compositionengine/impl/HwcBufferCache.h>
 
+#include <cassert>
 #include <gui/BufferQueue.h>
 #include <ui/GraphicBuffer.h>
 

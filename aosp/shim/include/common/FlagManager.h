@@ -71,6 +71,9 @@ public:
   LAYERVIEWER_FLAG(view_is_root_for_insets)
   LAYERVIEWER_FLAG(vsync_predictor_recovery)
   LAYERVIEWER_FLAG(local_tonemap_screenshots)
+  LAYERVIEWER_FLAG(begone_bright_hlg)
+  LAYERVIEWER_FLAG(flush_buffer_slots_to_uncache)
+  LAYERVIEWER_FLAG(fp)
 #undef LAYERVIEWER_FLAG
 };
 
