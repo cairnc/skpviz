@@ -91,6 +91,9 @@ add_subdirectory(renderengine)
 # ---- CompositionEngine (turns LayerSnapshots into LayerSettings for RE) ----
 add_subdirectory(compositionengine)
 
+# ---- SurfaceFlinger FrontEnd (trace / transactions → LayerSnapshots) ----
+add_subdirectory(surfaceflinger_frontend)
+
 # Convenience aggregate.
 add_library(aosp INTERFACE)
 target_link_libraries(aosp INTERFACE
