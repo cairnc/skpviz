@@ -25,7 +25,7 @@ namespace skia {
 // Otherwise there may be luminance shift for e.g., HLG.
 sk_sp<SkColorSpace> toSkColorSpace(ui::Dataspace dataspace) {
   skcms_Matrix3x3 gamut;
-  switch (static_cast<int32_t>(dataspace) & HAL_DATASPACE_STANDARD_MASK) {
+  switch (dataspace & HAL_DATASPACE_STANDARD_MASK) {
   case HAL_DATASPACE_STANDARD_BT709:
     gamut = SkNamedGamut::kSRGB;
     break;
@@ -51,7 +51,7 @@ sk_sp<SkColorSpace> toSkColorSpace(ui::Dataspace dataspace) {
     break;
   }
 
-  switch (static_cast<int32_t>(dataspace) & HAL_DATASPACE_TRANSFER_MASK) {
+  switch (dataspace & HAL_DATASPACE_TRANSFER_MASK) {
   case HAL_DATASPACE_TRANSFER_LINEAR:
     return SkColorSpace::MakeRGB(SkNamedTransferFn::kLinear, gamut);
   case HAL_DATASPACE_TRANSFER_SRGB:

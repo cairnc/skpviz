@@ -87,9 +87,6 @@
 #include "skia/debug/SkiaMemoryReporter.h"
 #include "skia/filters/StretchShaderFactory.h"
 #include "system/graphics-base-v1.0.h"
-#include <SkAndroidFrameworkTraceUtil.h>
-#include <cutils/compiler.h>
-#include <hardware/gralloc.h>
 
 namespace {
 

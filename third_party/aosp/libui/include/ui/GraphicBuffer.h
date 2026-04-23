@@ -16,6 +16,7 @@
 #include <cstdint>
 #include <string>
 
+#include <hardware/gralloc.h> // GRALLOC_USAGE_* — matches upstream include chain
 #include <ui/PixelFormat.h>
 #include <ui/Rect.h>
 #include <utils/RefBase.h>

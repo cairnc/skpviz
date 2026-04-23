@@ -1,10 +1,15 @@
 // SF-internal trace wrapper. Layerviewer code often reaches for CC_LIKELY /
-// CC_UNLIKELY and FlagManager alongside tracing; include them here so the
-// transitive surface matches real AOSP without editing CE sources.
+// CC_UNLIKELY, FlagManager, gralloc usage flags, Skia's framework trace util,
+// and macOS-compat scheduling shims alongside tracing; pull them all in here
+// so the transitive surface matches real AOSP without editing SF/RE sources.
 #pragma once
+#include <SkAndroidFrameworkTraceUtil.h>
 #include <common/FlagManager.h>
 #include <cutils/compiler.h>
 #include <cutils/trace.h>
+#include <log/log.h>                   // LOG_ALWAYS_FATAL etc.
+#include <processgroup/sched_policy.h> // macOS pthread_setname_np + sched stubs
+#include <unistd.h>                    // usleep
 
 #define SFTRACE_ENABLED() 0
 

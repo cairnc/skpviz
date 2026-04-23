@@ -14,9 +14,6 @@
  * limitations under the License.
  */
 
-#include <pthread.h>
-#include <unistd.h> // usleep
-
 #include "CommonPool.h"
 
 #undef LOG_TAG
@@ -43,14 +40,8 @@ CommonPool::CommonPool() {
       {
         std::array<char, 20> name{"reTask"};
         snprintf(name.data(), name.size(), "reTask%d", i);
-#if defined(__APPLE__)
-        // macOS pthread_setname_np takes only (name), applying to
-        // the current thread.
-        pthread_setname_np(name.data());
-#else
         auto self = pthread_self();
         pthread_setname_np(self, name.data());
-#endif
         setpriority(PRIO_PROCESS, 0, ANDROID_PRIORITY_FOREGROUND);
       }
       pool->workerLoop();

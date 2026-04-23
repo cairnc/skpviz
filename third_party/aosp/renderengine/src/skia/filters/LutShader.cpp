@@ -19,7 +19,6 @@
 #include <SkTileMode.h>
 #include <common/trace.h>
 #include <cutils/ashmem.h>
-#include <log/log.h>
 #include <math/half.h>
 #include <sys/mman.h>
 #include <ui/ColorSpace.h>
