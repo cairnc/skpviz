@@ -4,6 +4,7 @@
 
 #include <stdarg.h>
 #include <stdio.h>
+#include <stdlib.h>
 
 #ifndef LOG_TAG
 #define LOG_TAG "layerviewer"
@@ -27,8 +28,52 @@ typedef int android_LogPriority;
 extern "C" {
 #endif
 
-static inline int __android_log_print(int /*prio*/, const char *tag,
+// Minimum log level printed. RefBase.cpp emits a steady stream of ALOGW
+// whenever a stack-allocated RefBase subclass is destroyed (common in our
+// shim where we fake SurfaceControls / BBinders for the replay pipeline),
+// so default to ERROR. Override via LAYERVIEWER_LOG_LEVEL=V/D/I/W/E/F.
+static inline int __layerviewer_min_log_level(void) {
+  static int cached = -1;
+  if (cached >= 0)
+    return cached;
+  const char *env = getenv("LAYERVIEWER_LOG_LEVEL");
+  int lvl = 6; // ERROR
+  if (env && env[0]) {
+    switch (env[0]) {
+    case 'V':
+    case 'v':
+      lvl = 2;
+      break;
+    case 'D':
+    case 'd':
+      lvl = 3;
+      break;
+    case 'I':
+    case 'i':
+      lvl = 4;
+      break;
+    case 'W':
+    case 'w':
+      lvl = 5;
+      break;
+    case 'E':
+    case 'e':
+      lvl = 6;
+      break;
+    case 'F':
+    case 'f':
+      lvl = 7;
+      break;
+    }
+  }
+  cached = lvl;
+  return cached;
+}
+
+static inline int __android_log_print(int prio, const char *tag,
                                       const char *fmt, ...) {
+  if (prio < __layerviewer_min_log_level())
+    return 0;
   va_list ap;
   va_start(ap, fmt);
   fprintf(stderr, "[%s] ", tag ? tag : "?");
@@ -38,8 +83,10 @@ static inline int __android_log_print(int /*prio*/, const char *tag,
   return 0;
 }
 
-static inline int __android_log_write(int /*prio*/, const char *tag,
+static inline int __android_log_write(int prio, const char *tag,
                                       const char *msg) {
+  if (prio < __layerviewer_min_log_level())
+    return 0;
   fprintf(stderr, "[%s] %s\n", tag ? tag : "?", msg ? msg : "");
   return 0;
 }
