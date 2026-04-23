@@ -88,6 +88,9 @@ add_subdirectory(perfetto_protos)
 # ---- RenderEngine (Skia/Ganesh + our Desktop-GL variant) ----
 add_subdirectory(renderengine)
 
+# ---- CompositionEngine (turns LayerSnapshots into LayerSettings for RE) ----
+add_subdirectory(compositionengine)
+
 # Convenience aggregate.
 add_library(aosp INTERFACE)
 target_link_libraries(aosp INTERFACE
