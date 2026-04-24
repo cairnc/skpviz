@@ -107,6 +107,10 @@ struct ReplayedTrace {
   // for frame i. Lets the Transactions window filter to the current frame
   // and vice versa.
   std::vector<std::pair<size_t, size_t>> transactionRangeByFrame;
+  // pid → cmdline / process name, built from ProcessTree packets in the
+  // trace (if the capture enabled `linux.process_stats`). Empty for older
+  // SF-only captures.
+  std::unordered_map<int32_t, std::string> pidNames;
   int packetCount = 0;
   int layerSnapshotPacketCount = 0;
 };

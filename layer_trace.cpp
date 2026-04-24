@@ -130,6 +130,21 @@ std::unique_ptr<ReplayedTrace> LoadAndReplay(const std::string &path) {
       entries.push_back(&pkt.surfaceflinger_transactions());
     if (pkt.has_surfaceflinger_layers_snapshot())
       out->layerSnapshotPacketCount++;
+    // ProcessTree packets (from linux.process_stats with
+    // scan_all_processes_on_start: true) give us a pid → cmdline mapping
+    // so transactions can be annotated with a real process name. Later
+    // packets for the same pid overwrite, so we keep the most recent.
+    if (pkt.has_process_tree()) {
+      const auto &pt = pkt.process_tree();
+      for (int j = 0; j < pt.processes_size(); j++) {
+        const auto &p = pt.processes(j);
+        if (!p.has_pid() || p.cmdline_size() == 0)
+          continue;
+        // cmdline is null-delimited on disk but the proto splits it into
+        // repeated strings; the first token is the binary/package name.
+        out->pidNames[p.pid()] = p.cmdline(0);
+      }
+    }
   }
 
   if (entries.empty()) {

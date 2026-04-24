@@ -945,8 +945,7 @@ void DrawTransactions(AppState &app) {
   const bool focused =
       ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows);
 
-  // Toolbar: auto-sync toggle + manual sync button (disabled when auto is on,
-  // or when there's no selection to sync to).
+  // Toolbar: sync controls.
   ImGui::Checkbox("auto sync timeline", &app.autoSyncTimeline);
   ImGui::SameLine();
   const bool canManualSync = !app.autoSyncTimeline &&
@@ -962,64 +961,81 @@ void DrawTransactions(AppState &app) {
   ImGui::TextDisabled("%d transactions / %zu frames", n,
                       app.trace->frames.size());
 
-  ImGuiTableFlags tflags =
-      ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerV |
-      ImGuiTableFlags_ScrollY | ImGuiTableFlags_ScrollX |
-      ImGuiTableFlags_Resizable | ImGuiTableFlags_Sortable |
-      ImGuiTableFlags_Hideable | ImGuiTableFlags_SizingFixedFit;
-  if (ImGui::BeginTable("txns", 8, tflags)) {
+  // Four essential debugging columns — anything else is a right-click away
+  // in the Transaction Inspector.
+  ImGuiTableFlags tflags = ImGuiTableFlags_RowBg |
+                           ImGuiTableFlags_BordersInnerV |
+                           ImGuiTableFlags_ScrollY | ImGuiTableFlags_Resizable |
+                           ImGuiTableFlags_SizingFixedFit;
+  // Table id bumped (_v3) so any stale per-column layout in imgui.ini
+  // from previous column sets is discarded.
+  if (ImGui::BeginTable("txns_v3", 4, tflags)) {
     ImGui::TableSetupScrollFreeze(0, 1);
-    ImGui::TableSetupColumn("#",
-                            ImGuiTableColumnFlags_WidthFixed |
-                                ImGuiTableColumnFlags_DefaultSort,
-                            56.f);
+    ImGui::TableSetupColumn("#", ImGuiTableColumnFlags_WidthFixed, 56.f);
     ImGui::TableSetupColumn("frame", ImGuiTableColumnFlags_WidthFixed, 64.f);
-    ImGui::TableSetupColumn("post (s)", ImGuiTableColumnFlags_WidthFixed, 90.f);
-    ImGui::TableSetupColumn("pid", ImGuiTableColumnFlags_WidthFixed, 64.f);
-    ImGui::TableSetupColumn("uid", ImGuiTableColumnFlags_WidthFixed, 64.f);
-    ImGui::TableSetupColumn("txn id", ImGuiTableColumnFlags_WidthFixed, 160.f);
-    ImGui::TableSetupColumn("#layers", ImGuiTableColumnFlags_WidthFixed, 64.f);
-    ImGui::TableSetupColumn("#displays", ImGuiTableColumnFlags_WidthFixed,
-                            72.f);
+    ImGui::TableSetupColumn("process", ImGuiTableColumnFlags_WidthStretch,
+                            0.30f);
+    ImGui::TableSetupColumn("layers", ImGuiTableColumnFlags_WidthStretch,
+                            0.70f);
     ImGui::TableHeadersRow();
 
-    ImGuiListClipper clipper;
-    clipper.Begin(n);
-    while (clipper.Step()) {
-      for (int i = clipper.DisplayStart; i < clipper.DisplayEnd; i++) {
-        const auto &t = txns[i];
-        ImGui::TableNextRow();
-        bool sel = (app.selectedTransactionIdx == i);
-        ImGui::TableSetColumnIndex(0);
-        ImGui::PushID(i);
-        char buf[32];
-        std::snprintf(buf, sizeof(buf), "%d", i);
-        if (ImGui::Selectable(buf, sel, ImGuiSelectableFlags_SpanAllColumns)) {
-          app.selectedTransactionIdx = i;
-          if (app.autoSyncTimeline)
-            app.frameIndex = static_cast<int>(t.frameIndex);
-          // Raise the Transaction Inspector tab without stealing focus.
-          RaiseDockedTab("Transaction Inspector");
+    // No ImGuiListClipper: rows have variable height (the layers column is
+    // multi-line) and the clipper assumes uniform row heights, which made
+    // scrolling jumpy. Letting ImGui render every row is fine for the
+    // transaction counts we see — a few thousand at most.
+    for (int i = 0; i < n; i++) {
+      const auto &t = txns[i];
+      ImGui::TableNextRow();
+      bool sel = (app.selectedTransactionIdx == i);
+      ImGui::TableSetColumnIndex(0);
+      ImGui::PushID(i);
+      char buf[32];
+      std::snprintf(buf, sizeof(buf), "%d", i);
+      if (ImGui::Selectable(buf, sel, ImGuiSelectableFlags_SpanAllColumns)) {
+        app.selectedTransactionIdx = i;
+        if (app.autoSyncTimeline)
+          app.frameIndex = static_cast<int>(t.frameIndex);
+        // Raise the Transaction Inspector tab without stealing focus.
+        RaiseDockedTab("Transaction Inspector");
+      }
+      if (sel && app.scrollTxnTableToSelection) {
+        ImGui::SetScrollHereY(0.5f);
+        app.scrollTxnTableToSelection = false;
+      }
+      ImGui::PopID();
+      ImGui::TableSetColumnIndex(1);
+      ImGui::Text("%zu", t.frameIndex);
+      ImGui::TableSetColumnIndex(2);
+      // "process" falls back to "pid N" when the trace has no ProcessTree.
+      {
+        auto it = app.trace->pidNames.find(t.pid);
+        if (it != app.trace->pidNames.end())
+          ImGui::TextUnformatted(it->second.c_str());
+        else
+          ImGui::Text("pid %d", t.pid);
+      }
+      ImGui::TableSetColumnIndex(3);
+      // "layers" column: comma-separated short names from the frame's
+      // snapshot map (falls back to `#<id>` for layers not present in
+      // the frame, e.g. destroyed-same-entry). Shows the count as a
+      // prefix so busy txns still stand out at a glance.
+      {
+        const auto *frame = t.frameIndex < app.trace->frames.size()
+                                ? &app.trace->frames[t.frameIndex]
+                                : nullptr;
+        std::string row;
+        row.reserve(64);
+        for (size_t k = 0; k < t.affectedLayerIds.size(); k++) {
+          if (k > 0)
+            row += '\n';
+          uint32_t lid = t.affectedLayerIds[k];
+          const auto *snap = frame ? frame->snapshot(lid) : nullptr;
+          row += snap ? shortLayerName(snap->name)
+                      : android::base::StringPrintf("#%u", lid);
         }
-        if (sel && app.scrollTxnTableToSelection) {
-          ImGui::SetScrollHereY(0.5f);
-          app.scrollTxnTableToSelection = false;
-        }
-        ImGui::PopID();
-        ImGui::TableSetColumnIndex(1);
-        ImGui::Text("%zu", t.frameIndex);
-        ImGui::TableSetColumnIndex(2);
-        ImGui::Text("%.6f", t.postTimeNs / 1e9);
-        ImGui::TableSetColumnIndex(3);
-        ImGui::Text("%d", t.pid);
-        ImGui::TableSetColumnIndex(4);
-        ImGui::Text("%d", t.uid);
-        ImGui::TableSetColumnIndex(5);
-        ImGui::Text("%llu", (unsigned long long)t.transactionId);
-        ImGui::TableSetColumnIndex(6);
-        ImGui::Text("%d", t.layerChanges);
-        ImGui::TableSetColumnIndex(7);
-        ImGui::Text("%d", t.displayChanges);
+        if (row.empty())
+          row = "(none)";
+        ImGui::TextUnformatted(row.c_str());
       }
     }
     ImGui::EndTable();
@@ -1141,9 +1157,18 @@ void DrawTransactionInspector(AppState &app) {
                      : std::string("-")},
           });
 
+  std::string processName;
+  {
+    auto it = app.trace->pidNames.find(t.pid);
+    if (it != app.trace->pidNames.end())
+      processName = it->second;
+    else
+      processName = "(unknown — no ProcessTree in trace)";
+  }
   section("Source", true,
           {
               {"pid", std::to_string(t.pid)},
+              {"process", processName},
               {"uid", std::to_string(t.uid)},
               {"inputEventId", t.inputEventId ? std::to_string(t.inputEventId)
                                               : std::string("0 (none)")},
