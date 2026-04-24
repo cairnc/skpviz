@@ -667,48 +667,66 @@ void DrawLayerTreePane(const layerviewer::CapturedFrame &frame, AppState &app) {
 // Inspector
 // ---------------------------------------------------------------------------
 
-// Key/value section used by both inspectors. Lays out a CollapsingHeader
-// containing a 2-column table where each row is (key, value).
-using KvRow = std::pair<const char *, std::string>;
-using KvRows = std::initializer_list<KvRow>;
-void RenderKvSection(const char *label, bool defaultOpen, KvRows rows) {
+// Bracketed key/value section idiom used by both inspectors. Use:
+//
+//     if (BeginKvSection("Identity")) {
+//       KvInt("pid", pid);
+//       KvStr("name", name);
+//       KvBool("visible", visible);
+//       ...
+//       EndKvSection();
+//     }
+//
+// Each Kv* row is only formatted when the section is actually open, so
+// long sections can stay lazy without the caller threading a bool.
+bool BeginKvSection(const char *label, bool defaultOpen = true) {
   ImGuiTreeNodeFlags flags = defaultOpen ? ImGuiTreeNodeFlags_DefaultOpen : 0;
   if (!ImGui::CollapsingHeader(label, flags))
-    return;
+    return false;
   ImGuiTableFlags tflags =
       ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_RowBg;
-  if (!ImGui::BeginTable(label, 2, tflags))
-    return;
-  for (const KvRow &r : rows) {
-    ImGui::TableNextRow();
-    ImGui::TableSetColumnIndex(0);
-    ImGui::TextUnformatted(r.first);
-    ImGui::TableSetColumnIndex(1);
-    ImGui::TextUnformatted(r.second.c_str());
-  }
-  ImGui::EndTable();
+  return ImGui::BeginTable(label, 2, tflags);
+}
+void EndKvSection() { ImGui::EndTable(); }
+
+// Lowest-level row writer — the typed helpers below funnel through this.
+void KvStr(const char *key, const char *value) {
+  ImGui::TableNextRow();
+  ImGui::TableSetColumnIndex(0);
+  ImGui::TextUnformatted(key);
+  ImGui::TableSetColumnIndex(1);
+  ImGui::TextUnformatted(value);
+}
+void KvStr(const char *key, const std::string &value) {
+  KvStr(key, value.c_str());
 }
 
-// Small string formatters shared by the Snapshot Inspector.
-std::string Yn(bool b) { return b ? "yes" : "no"; }
-
-std::string RectStr(const android::Rect &r) {
-  return android::base::StringPrintf("(%d, %d) -> (%d, %d)  [%dx%d]", r.left,
-                                     r.top, r.right, r.bottom, r.width(),
-                                     r.height());
+void KvBool(const char *key, bool v) { KvStr(key, v ? "yes" : "no"); }
+void KvInt(const char *key, long long v) {
+  KvStr(key, std::to_string(v).c_str());
+}
+void KvHex(const char *key, unsigned long long v) {
+  KvStr(key, android::base::StringPrintf("0x%llx", v));
 }
 
-std::string FloatRectStr(const android::FloatRect &r) {
-  return android::base::StringPrintf(
-      "(%.1f, %.1f) -> (%.1f, %.1f)  [%.1fx%.1f]", r.left, r.top, r.right,
-      r.bottom, r.right - r.left, r.bottom - r.top);
+// printf-style convenience for one-off formats. Separate from KvStr so
+// we don't accidentally pass a std::string as a format string.
+template <class... Args>
+void KvFmt(const char *key, const char *fmt, Args &&...args) {
+  KvStr(key, android::base::StringPrintf(fmt, std::forward<Args>(args)...));
 }
 
-std::string XformStr(const android::ui::Transform &t) {
-  return android::base::StringPrintf("dsdx=%.3f dtdx=%.3f tx=%.1f\n"
-                                     "dtdy=%.3f dsdy=%.3f ty=%.1f",
-                                     t.dsdx(), t.dtdx(), t.tx(), t.dtdy(),
-                                     t.dsdy(), t.ty());
+void KvRect(const char *key, const android::Rect &r) {
+  KvFmt(key, "(%d, %d) -> (%d, %d)  [%dx%d]", r.left, r.top, r.right, r.bottom,
+        r.width(), r.height());
+}
+void KvFloatRect(const char *key, const android::FloatRect &r) {
+  KvFmt(key, "(%.1f, %.1f) -> (%.1f, %.1f)  [%.1fx%.1f]", r.left, r.top,
+        r.right, r.bottom, r.right - r.left, r.bottom - r.top);
+}
+void KvTransform(const char *key, const android::ui::Transform &t) {
+  KvFmt(key, "dsdx=%.3f dtdx=%.3f tx=%.1f\ndtdy=%.3f dsdy=%.3f ty=%.1f",
+        t.dsdx(), t.dtdx(), t.tx(), t.dtdy(), t.dsdy(), t.ty());
 }
 
 using Reachability =
@@ -747,125 +765,103 @@ void DrawInspector(const layerviewer::CapturedFrame &frame,
                       app.selectedLayerId, snap->globalZ, snap->sequence,
                       snap->uniqueSequence);
 
-  RenderKvSection(
-      "Identity", true,
-      {
-          {"id", std::to_string(app.selectedLayerId)},
-          {"parent", parentId == UINT32_MAX ? std::string("-")
-                                            : std::to_string(parentId)},
-          {"sequence", std::to_string(snap->sequence)},
-          {"uniqueSequence", std::to_string(snap->uniqueSequence)},
-          {"globalZ", std::to_string(snap->globalZ)},
-          {"layerStack", std::to_string(snap->outputFilter.layerStack.id)},
-          {"uid", std::to_string(snap->uid.val())},
-          {"pid", std::to_string(snap->pid.val())},
-          {"debugName", snap->debugName},
-      });
-
-  RenderKvSection(
-      "Visibility", true,
-      {
-          {"isVisible", Yn(snap->isVisible)},
-          {"reachablilty", ReachStr(snap->reachablilty)},
-          {"hiddenByPolicyFromParent", Yn(snap->isHiddenByPolicyFromParent)},
-          {"hiddenByPolicyFromRelativeParent",
-           Yn(snap->isHiddenByPolicyFromRelativeParent)},
-          {"contentDirty", Yn(snap->contentDirty)},
-          {"hasReadyFrame", Yn(snap->hasReadyFrame)},
-          {"isOpaque", Yn(snap->isOpaque)},
-          {"contentOpaque", Yn(snap->contentOpaque)},
-          {"layerOpaqueFlagSet", Yn(snap->layerOpaqueFlagSet)},
-          {"isSecure", Yn(snap->isSecure)},
-          {"forceClientComposition", Yn(snap->forceClientComposition)},
-          {"isSmallDirty", Yn(snap->isSmallDirty)},
-          {"reason", snap->getIsVisibleReason()},
-      });
-
-  RenderKvSection(
-      "Geometry", true,
-      {
-          {"transformedBounds", FloatRectStr(snap->transformedBounds)},
-          {"geomLayerBounds", FloatRectStr(snap->geomLayerBounds)},
-          {"geomLayerCrop", FloatRectStr(snap->geomLayerCrop)},
-          {"geomCrop", FloatRectStr(snap->geomCrop)},
-          {"geomContentCrop", RectStr(snap->geomContentCrop)},
-          {"bufferSize", RectStr(snap->bufferSize)},
-          {"croppedBufferSize", FloatRectStr(snap->croppedBufferSize)},
-          {"geomBufferSize", RectStr(snap->geomBufferSize)},
-          {"cursorFrame", RectStr(snap->cursorFrame)},
-          {"geomLayerTransform", XformStr(snap->geomLayerTransform)},
-          {"localTransform", XformStr(snap->localTransform)},
-          {"parentTransform", XformStr(snap->parentTransform)},
-          {"geomBufferTransform",
-           android::base::StringPrintf("0x%x", snap->geomBufferTransform)},
-          {"bufferTransform",
-           android::base::StringPrintf("0x%x", snap->geomBufferTransform)},
-          {"invalidTransform", Yn(snap->invalidTransform)},
-          {"geomUsesSourceCrop", Yn(snap->geomUsesSourceCrop)},
-          {"geomBufferUsesDisplayInverseTransform",
-           Yn(snap->geomBufferUsesDisplayInverseTransform)},
-      });
-
-  RenderKvSection(
-      "Color / Blending", true,
-      {
-          {"color",
-           android::base::StringPrintf("r=%.2f g=%.2f b=%.2f a=%.2f",
-                                       static_cast<float>(snap->color.r),
-                                       static_cast<float>(snap->color.g),
-                                       static_cast<float>(snap->color.b),
-                                       static_cast<float>(snap->color.a))},
-          {"alpha", android::base::StringPrintf(
-                        "%.2f", static_cast<float>(snap->alpha))},
-          {"dataspace", android::base::StringPrintf(
-                            "0x%x", static_cast<uint32_t>(snap->dataspace))},
-          {"dimmingEnabled", Yn(snap->dimmingEnabled)},
-          {"colorTransformIsIdentity", Yn(snap->colorTransformIsIdentity)},
-          {"premultipliedAlpha", Yn(snap->premultipliedAlpha)},
-          {"cornerRadius", android::base::StringPrintf(
-                               "x=%.2f y=%.2f", snap->roundedCorner.radius.x,
-                               snap->roundedCorner.radius.y)},
-          {"cornerCrop", FloatRectStr(snap->roundedCorner.cropRect)},
-          {"backgroundBlurRadius", std::to_string(snap->backgroundBlurRadius)},
-          {"blurRegions", std::to_string(snap->blurRegions.size())},
-      });
-
-  if (snap->externalTexture) {
-    RenderKvSection(
-        "Buffer", true,
-        {
-            {"id", std::to_string(snap->externalTexture->getId())},
-            {"size", android::base::StringPrintf(
-                         "%ux%u", snap->externalTexture->getWidth(),
-                         snap->externalTexture->getHeight())},
-            {"pixelFormat",
-             std::to_string(snap->externalTexture->getPixelFormat())},
-            {"usage",
-             android::base::StringPrintf(
-                 "0x%llx",
-                 (unsigned long long)snap->externalTexture->getUsage())},
-            {"frameNumber", std::to_string(snap->frameNumber)},
-            {"hasProtectedContent", Yn(snap->hasProtectedContent)},
-        });
+  if (BeginKvSection("Identity")) {
+    KvInt("id", app.selectedLayerId);
+    if (parentId == UINT32_MAX)
+      KvStr("parent", "-");
+    else
+      KvInt("parent", parentId);
+    KvInt("sequence", snap->sequence);
+    KvInt("uniqueSequence", snap->uniqueSequence);
+    KvInt("globalZ", snap->globalZ);
+    KvInt("layerStack", snap->outputFilter.layerStack.id);
+    KvInt("uid", snap->uid.val());
+    KvInt("pid", snap->pid.val());
+    KvStr("debugName", snap->debugName);
+    EndKvSection();
   }
 
-  RenderKvSection(
-      "Input", false,
-      {
-          {"hasInputInfo", Yn(snap->hasInputInfo())},
-          {"canReceiveInput", Yn(snap->canReceiveInput())},
-          {"touchableRegion bounds",
-           RectStr(snap->inputInfo.touchableRegion.getBounds())},
-          {"frame", RectStr(snap->inputInfo.frame)},
-          {"globalScaleFactor", android::base::StringPrintf(
-                                    "%.3f", snap->inputInfo.globalScaleFactor)},
-          {"surfaceInset", std::to_string(snap->inputInfo.surfaceInset)},
-          {"token", snap->inputInfo.token ? "yes" : "no"},
-          {"dropInputMode",
-           std::to_string(static_cast<int>(snap->dropInputMode))},
-          {"trustedOverlay",
-           std::to_string(static_cast<int>(snap->trustedOverlay))},
-      });
+  if (BeginKvSection("Visibility")) {
+    KvBool("isVisible", snap->isVisible);
+    KvStr("reachablilty", ReachStr(snap->reachablilty));
+    KvBool("hiddenByPolicyFromParent", snap->isHiddenByPolicyFromParent);
+    KvBool("hiddenByPolicyFromRelativeParent",
+           snap->isHiddenByPolicyFromRelativeParent);
+    KvBool("contentDirty", snap->contentDirty);
+    KvBool("hasReadyFrame", snap->hasReadyFrame);
+    KvBool("isOpaque", snap->isOpaque);
+    KvBool("contentOpaque", snap->contentOpaque);
+    KvBool("layerOpaqueFlagSet", snap->layerOpaqueFlagSet);
+    KvBool("isSecure", snap->isSecure);
+    KvBool("forceClientComposition", snap->forceClientComposition);
+    KvBool("isSmallDirty", snap->isSmallDirty);
+    KvStr("reason", snap->getIsVisibleReason());
+    EndKvSection();
+  }
+
+  if (BeginKvSection("Geometry")) {
+    KvFloatRect("transformedBounds", snap->transformedBounds);
+    KvFloatRect("geomLayerBounds", snap->geomLayerBounds);
+    KvFloatRect("geomLayerCrop", snap->geomLayerCrop);
+    KvFloatRect("geomCrop", snap->geomCrop);
+    KvRect("geomContentCrop", snap->geomContentCrop);
+    KvRect("bufferSize", snap->bufferSize);
+    KvFloatRect("croppedBufferSize", snap->croppedBufferSize);
+    KvRect("geomBufferSize", snap->geomBufferSize);
+    KvRect("cursorFrame", snap->cursorFrame);
+    KvTransform("geomLayerTransform", snap->geomLayerTransform);
+    KvTransform("localTransform", snap->localTransform);
+    KvTransform("parentTransform", snap->parentTransform);
+    KvHex("geomBufferTransform", snap->geomBufferTransform);
+    KvHex("bufferTransform", snap->geomBufferTransform);
+    KvBool("invalidTransform", snap->invalidTransform);
+    KvBool("geomUsesSourceCrop", snap->geomUsesSourceCrop);
+    KvBool("geomBufferUsesDisplayInverseTransform",
+           snap->geomBufferUsesDisplayInverseTransform);
+    EndKvSection();
+  }
+
+  if (BeginKvSection("Color / Blending")) {
+    KvFmt("color", "r=%.2f g=%.2f b=%.2f a=%.2f",
+          static_cast<float>(snap->color.r), static_cast<float>(snap->color.g),
+          static_cast<float>(snap->color.b), static_cast<float>(snap->color.a));
+    KvFmt("alpha", "%.2f", static_cast<float>(snap->alpha));
+    KvHex("dataspace", static_cast<uint32_t>(snap->dataspace));
+    KvBool("dimmingEnabled", snap->dimmingEnabled);
+    KvBool("colorTransformIsIdentity", snap->colorTransformIsIdentity);
+    KvBool("premultipliedAlpha", snap->premultipliedAlpha);
+    KvFmt("cornerRadius", "x=%.2f y=%.2f", snap->roundedCorner.radius.x,
+          snap->roundedCorner.radius.y);
+    KvFloatRect("cornerCrop", snap->roundedCorner.cropRect);
+    KvInt("backgroundBlurRadius", snap->backgroundBlurRadius);
+    KvInt("blurRegions", snap->blurRegions.size());
+    EndKvSection();
+  }
+
+  if (snap->externalTexture && BeginKvSection("Buffer")) {
+    KvInt("id", snap->externalTexture->getId());
+    KvFmt("size", "%ux%u", snap->externalTexture->getWidth(),
+          snap->externalTexture->getHeight());
+    KvInt("pixelFormat", snap->externalTexture->getPixelFormat());
+    KvHex("usage", snap->externalTexture->getUsage());
+    KvInt("frameNumber", snap->frameNumber);
+    KvBool("hasProtectedContent", snap->hasProtectedContent);
+    EndKvSection();
+  }
+
+  if (BeginKvSection("Input", /*defaultOpen=*/false)) {
+    KvBool("hasInputInfo", snap->hasInputInfo());
+    KvBool("canReceiveInput", snap->canReceiveInput());
+    KvRect("touchableRegion bounds",
+           snap->inputInfo.touchableRegion.getBounds());
+    KvRect("frame", snap->inputInfo.frame);
+    KvFmt("globalScaleFactor", "%.3f", snap->inputInfo.globalScaleFactor);
+    KvInt("surfaceInset", snap->inputInfo.surfaceInset);
+    KvBool("token", static_cast<bool>(snap->inputInfo.token));
+    KvInt("dropInputMode", static_cast<int>(snap->dropInputMode));
+    KvInt("trustedOverlay", static_cast<int>(snap->trustedOverlay));
+    EndKvSection();
+  }
 
   // getDebugString is SF's own structured dump — keep it around for
   // anything the section rows don't cover (damage region, shadows,
@@ -1152,62 +1148,60 @@ void DrawTransactionInspector(AppState &app) {
     }
   }
 
-  RenderKvSection(
-      "Identity", true,
-      {
-          {"index", std::to_string(app.selectedTransactionIdx)},
-          {"transactionId",
-           android::base::StringPrintf("%llu (0x%llx)",
-                                       (unsigned long long)t.transactionId,
-                                       (unsigned long long)t.transactionId)},
-          {"frameIndex", std::to_string(t.frameIndex)},
-          {"frame vsyncId",
-           frame ? std::to_string(frame->vsyncId) : std::string("-")},
-          {"frame elapsed-realtime",
-           frame ? android::base::StringPrintf("%.9f s", frame->tsNs / 1e9)
-                 : std::string("-")},
-      });
-
-  std::string processName;
-  {
-    auto it = app.trace->pidNames.find(t.pid);
-    if (it != app.trace->pidNames.end())
-      processName = it->second;
+  if (BeginKvSection("Identity")) {
+    KvInt("index", app.selectedTransactionIdx);
+    KvFmt("transactionId", "%llu (0x%llx)", (unsigned long long)t.transactionId,
+          (unsigned long long)t.transactionId);
+    KvInt("frameIndex", t.frameIndex);
+    if (frame)
+      KvInt("frame vsyncId", frame->vsyncId);
     else
-      processName = "(unknown — no ProcessTree in trace)";
+      KvStr("frame vsyncId", "-");
+    if (frame)
+      KvFmt("frame elapsed-realtime", "%.9f s", frame->tsNs / 1e9);
+    else
+      KvStr("frame elapsed-realtime", "-");
+    EndKvSection();
   }
-  RenderKvSection(
-      "Source", true,
-      {
-          {"pid", std::to_string(t.pid)},
-          {"process", processName},
-          {"uid", std::to_string(t.uid)},
-          {"inputEventId", t.inputEventId ? std::to_string(t.inputEventId)
-                                          : std::string("0 (none)")},
-      });
 
-  RenderKvSection("Timing", true,
-                  {
-                      {"postTime (ns)", std::to_string(t.postTimeNs)},
-                      {"postTime (s)",
-                       android::base::StringPrintf("%.9f", t.postTimeNs / 1e9)},
-                      {"vsyncId (in txn)", std::to_string(t.vsyncId)},
-                      {"vsyncId (frame)", frame ? std::to_string(frame->vsyncId)
-                                                : std::string("-")},
-                      {"matches frame vsync",
-                       frame ? (frame->vsyncId == t.vsyncId ? "yes" : "no")
-                             : std::string("-")},
-                  });
+  if (BeginKvSection("Source")) {
+    KvInt("pid", t.pid);
+    std::unordered_map<int32_t, std::string>::const_iterator it =
+        app.trace->pidNames.find(t.pid);
+    if (it != app.trace->pidNames.end())
+      KvStr("process", it->second);
+    else
+      KvStr("process", "(unknown — no ProcessTree in trace)");
+    KvInt("uid", t.uid);
+    if (t.inputEventId)
+      KvInt("inputEventId", t.inputEventId);
+    else
+      KvStr("inputEventId", "0 (none)");
+    EndKvSection();
+  }
 
-  RenderKvSection("Contents", true,
-                  {
-                      {"layer changes", std::to_string(t.layerChanges)},
-                      {"display changes", std::to_string(t.displayChanges)},
-                      {"affected layers (unique)",
-                       std::to_string(t.affectedLayerIds.size())},
-                      {"merged transactions",
-                       std::to_string(t.mergedTransactionIds.size())},
-                  });
+  if (BeginKvSection("Timing")) {
+    KvInt("postTime (ns)", t.postTimeNs);
+    KvFmt("postTime (s)", "%.9f", t.postTimeNs / 1e9);
+    KvInt("vsyncId (in txn)", t.vsyncId);
+    if (frame)
+      KvInt("vsyncId (frame)", frame->vsyncId);
+    else
+      KvStr("vsyncId (frame)", "-");
+    if (frame)
+      KvBool("matches frame vsync", frame->vsyncId == t.vsyncId);
+    else
+      KvStr("matches frame vsync", "-");
+    EndKvSection();
+  }
+
+  if (BeginKvSection("Contents")) {
+    KvInt("layer changes", t.layerChanges);
+    KvInt("display changes", t.displayChanges);
+    KvInt("affected layers (unique)", t.affectedLayerIds.size());
+    KvInt("merged transactions", t.mergedTransactionIds.size());
+    EndKvSection();
+  }
 
   if (!t.mergedTransactionIds.empty() &&
       ImGui::CollapsingHeader("Merged transaction ids")) {
