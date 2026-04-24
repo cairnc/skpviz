@@ -72,7 +72,6 @@ struct CapturedLayerChange {
   uint32_t layerId = 0;
   // `what` bitmask from LayerState — which fields were touched. The UI
   // decodes this into flag names (ePositionChanged, eBufferChanged, …).
-  // Proto only uses lsb for now; keep 64-bit in case msb bits appear.
   uint64_t what = 0;
 };
 

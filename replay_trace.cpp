@@ -1,10 +1,10 @@
-// replay_trace — stage 1 of the layerviewer pipeline.
+// replay_trace — CLI smoke-test for the FrontEnd replay.
 //
 // Reads a perfetto .pftrace that has both android.surfaceflinger.transactions
-// and android.surfaceflinger.layers, drives the SF FrontEnd the same way the
-// upstream layertracegenerator tool does (LayerLifecycleManager →
-// LayerHierarchyBuilder → LayerSnapshotBuilder), and dumps a text summary of
-// the reconstructed snapshots so we can eyeball whether the FE is recreating
+// and android.surfaceflinger.layers, drives the SF FrontEnd (LayerLifecycle-
+// Manager → LayerHierarchyBuilder → LayerSnapshotBuilder) the same way the
+// upstream layertracegenerator tool does, and dumps a text summary of the
+// reconstructed snapshots so we can eyeball whether the FE is recreating
 // state correctly.
 
 #include <cinttypes>

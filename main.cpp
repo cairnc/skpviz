@@ -339,10 +339,8 @@ struct AppState {
   // read one frame later to render an info line above the strip. Using
   // last-frame's value avoids a two-pass layout.
   int timelineHoverIdx = -1;
-  // Timeline pan+zoom (same UX as the preview: plain scroll pans,
-  // Cmd/Ctrl+scroll zooms around the cursor, click-drag pans). zoom=1 =
-  // "fit all entries into the strip width"; scrollX is in pixels of the
-  // virtual strip.
+  // Timeline pan+zoom. zoom=1 fits all entries into the strip width;
+  // scrollX is a pixel offset into the virtual (zoomed) strip.
   float timelineZoom = 1.f;
   float timelineScrollX = 0.f;
   View3D wireframe3D;
@@ -1300,8 +1298,7 @@ ImU32 PidTrackColor(int pid) {
   return IM_COL32(r, g, b, 255);
 }
 
-// Pan/zoom state for one row of the timeline. Threaded through slice-drawing
-// as a struct so we don't need capture-heavy lambdas.
+// Per-row state passed to the slice-drawing helper.
 struct TimelineRow {
   ImDrawList *dl;
   ImVec2 cellTL;
@@ -1691,9 +1688,7 @@ void DrawTimeline(AppState &app) {
 // ---------------------------------------------------------------------------
 
 // Owns a GL texture + FBO and wraps it as an SkSurface. Recreated on resize;
-// the texture id is what we hand to ImGui::Image. This is also where the real
-// RenderEngine output will land in stage 2 — the rest of the preview pipeline
-// doesn't change when CE/RE start writing into this surface.
+// the texture id is what we hand to ImGui::Image.
 struct PreviewTarget {
   GLuint texId = 0;
   GLuint fbo = 0;
@@ -1962,51 +1957,6 @@ void DrawWireframe(const layerviewer::CapturedFrame &frame, AppState &app) {
       app.scrollTreeToSelection = true;
     }
   }
-}
-
-// Placeholder preview. The real composition path — LayerSnapshots → resident
-// `LayerFE`s → `compositionengine::Output::generateClientCompositionRequests`
-// → `SkiaDesktopGLRenderEngine::drawLayers` into a GraphicBuffer-backed
-// ExternalTexture — replaces this function in the next commit. For now we
-// just draw the display viewport so the window isn't blank while the rest
-// of the plumbing is coming online.
-void DrawPreviewCanvas(SkCanvas *canvas, int fbW, int fbH,
-                       const layerviewer::CapturedFrame &frame,
-                       const AppState &app) {
-  (void)app;
-  SkPaint bg;
-  bg.setColor(SkColorSetARGB(255, 24, 24, 28));
-  canvas->drawRect(SkRect::MakeIWH(fbW, fbH), bg);
-
-  float cw = frame.displayWidth;
-  float ch = frame.displayHeight;
-  if (cw <= 0 || ch <= 0)
-    return;
-
-  FitTransform t = FitRectToCanvas(cw, ch, (float)fbW, (float)fbH, 32.f);
-  SkRect displayRect = SkRect::MakeXYWH(t.tx, t.ty, cw * t.scale, ch * t.scale);
-  DrawCheckerboard(canvas, displayRect, 16.f);
-
-  SkPaint border;
-  border.setStyle(SkPaint::kStroke_Style);
-  border.setAntiAlias(true);
-  border.setStrokeWidth(1.5f);
-  border.setColor(SkColorSetARGB(200, 160, 160, 200));
-  canvas->drawRect(displayRect, border);
-
-  SkFont font(nullptr, 18.f);
-  font.setEdging(SkFont::Edging::kAntiAlias);
-  SkPaint text;
-  text.setColor4f({0.80f, 0.82f, 0.90f, 1.f}, nullptr);
-  canvas->drawString("composition pipeline landing in next commit",
-                     displayRect.left() + 12.f, displayRect.top() + 28.f, font,
-                     text);
-  canvas->drawString(
-      frame.snapshots.size() == 0
-          ? "(no reachable layers in this frame)"
-          : (std::to_string(frame.snapshots.size()) + " reachable snapshots")
-                .c_str(),
-      displayRect.left() + 12.f, displayRect.top() + 52.f, font, text);
 }
 
 // ---------------------------------------------------------------------------
@@ -2350,7 +2300,6 @@ int main(int argc, char **argv) {
     ImGui::End();
 
     if (ImGui::Begin("Preview")) {
-      // Toolbar — keep interactions discoverable without cluttering.
       ImGui::TextDisabled(
           "drag/two-finger scroll = pan   ⌘scroll/pinch = zoom");
       ImGui::SameLine();
@@ -2368,8 +2317,7 @@ int main(int argc, char **argv) {
             compositor.composeFrame(app.trace->frames[app.frameIndex]);
 
         // RE's own Ganesh context touched a bunch of GL state — restore the
-        // default framebuffer + viewport for ImGui, same as we used to do
-        // after Skia FBO rendering.
+        // default framebuffer + viewport so ImGui renders into the window.
         glBindFramebuffer(GL_FRAMEBUFFER, 0);
         glViewport(0, 0, fbW, fbH);
 
@@ -2418,9 +2366,8 @@ int main(int argc, char **argv) {
         dl->AddRect(imgMin, imgMax, IM_COL32(160, 160, 200, 220), 0.f, 0, 1.f);
         dl->PopClipRect();
 
-        // Input handling — unchanged from the Skia-FBO era. Plain wheel pans
-        // (matches macOS two-finger scroll); ⌘/Ctrl+wheel zooms around the
-        // cursor; dragging pans. See earlier commit for the pan-anchor math.
+        // Plain wheel pans (matches macOS two-finger scroll); ⌘/Ctrl+wheel
+        // zooms around the cursor; dragging pans.
         if (ImGui::IsItemHovered()) {
           float wheelY = io.MouseWheel;
           float wheelX = io.MouseWheelH;
