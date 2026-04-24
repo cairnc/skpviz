@@ -20,6 +20,7 @@
 #include <cstring>
 #include <memory>
 #include <string>
+#include <unordered_set>
 #include <vector>
 
 #include <android-base/stringprintf.h>
@@ -305,6 +306,7 @@ struct View3D {
   float yawDeg = 25.f;        // rotation around vertical screen axis
   float pitchDeg = 10.f;      // rotation around horizontal screen axis
   float depthSpacing = 200.f; // per-layer Z step in device pixels
+  float opacity = 0.8f;       // quad fill alpha (stroke stays opaque)
 };
 
 struct PreviewView {
@@ -322,7 +324,10 @@ struct AppState {
   // next draw to auto-scroll to the selected node.
   bool scrollTreeToSelection = false;
   bool showInvisible = false;
-  bool resetLayoutOnce = true;     // first-run default layout
+  bool treeOnlyVisible =
+      false;                   // tree filter: hide non-visible (keep ancestors)
+  bool treeShortNames = true;  // winscope-style name shortening in tree
+  bool resetLayoutOnce = true; // first-run default layout
   bool requestResetLayout = false; // View → Reset Layout
   View3D wireframe3D;
   PreviewView preview;
@@ -484,19 +489,60 @@ float FitFontSize(const char *text, float maxW, float maxH, float minSize,
 // Layer tree
 // ---------------------------------------------------------------------------
 
+// Winscope-style name shortening for display in the tree. Handles the two
+// common wrappers SF layer names get wrapped in:
+//
+//   - `Surface(name=<X>)/@0xhex ...`  → unwrap to <X>
+//   - `<package>/<fqcn>#id`           → take part after the last '/'
+//
+// Anything else (`Task=12#164`, `TaskFragment{…}#115`, `[Gesture Monitor] …`)
+// is returned unchanged. `=` is NOT treated as a separator in general — it
+// appears inside metadata like `mode=fullscreen`, `Task=12`.
+std::string shortLayerName(const std::string &full) {
+  // Unwrap Surface(name=X)/@0xhex …
+  constexpr const char kSurfacePrefix[] = "Surface(name=";
+  constexpr size_t kSurfacePrefixLen = sizeof(kSurfacePrefix) - 1;
+  if (full.compare(0, kSurfacePrefixLen, kSurfacePrefix) == 0) {
+    size_t close = full.find(')', kSurfacePrefixLen);
+    if (close != std::string::npos)
+      return full.substr(kSurfacePrefixLen, close - kSurfacePrefixLen);
+  }
+  // Activity/package path: `com.x.y/com.x.y.Foo#N` → `com.x.y.Foo#N`.
+  size_t slash = full.find_last_of('/');
+  if (slash != std::string::npos)
+    return full.substr(slash + 1);
+  return full;
+}
+
 // Recursively draw one node, and push visible rows into `flat` in the order
-// they appear — used for up/down arrow key navigation.
+// they appear — used for up/down arrow key navigation. `keep` (optional,
+// for the "only visible" filter) limits recursion to the ids in the set.
 void DrawLayerTreeNode(const layerviewer::CapturedFrame &frame, uint32_t id,
-                       AppState &app, std::vector<uint32_t> &flat) {
+                       AppState &app, std::vector<uint32_t> &flat,
+                       const std::unordered_set<uint32_t> *keep) {
+  if (keep && !keep->count(id))
+    return;
   const auto *snap = frame.snapshot(id);
   if (!snap)
     return;
   const auto &children = frame.children(id);
+  // With the "only visible" filter, a parent may be kept only because some
+  // descendant is visible. Treat it as a leaf if *it* has no kept children.
+  bool hasKeptChild = false;
+  if (keep) {
+    for (uint32_t c : children)
+      if (keep->count(c)) {
+        hasKeptChild = true;
+        break;
+      }
+  } else {
+    hasKeptChild = !children.empty();
+  }
 
-  ImGuiTreeNodeFlags flags = ImGuiTreeNodeFlags_OpenOnArrow |
-                             ImGuiTreeNodeFlags_SpanFullWidth |
-                             ImGuiTreeNodeFlags_DefaultOpen;
-  if (children.empty())
+  ImGuiTreeNodeFlags flags =
+      ImGuiTreeNodeFlags_OpenOnArrow | ImGuiTreeNodeFlags_SpanAvailWidth |
+      ImGuiTreeNodeFlags_SpanFullWidth | ImGuiTreeNodeFlags_DefaultOpen;
+  if (!hasKeptChild)
     flags |= ImGuiTreeNodeFlags_Leaf;
   const bool selected = app.selectedLayerId == id;
   if (selected)
@@ -508,7 +554,9 @@ void DrawLayerTreeNode(const layerviewer::CapturedFrame &frame, uint32_t id,
   // it, consume the flag.
   if (selected && app.scrollTreeToSelection)
     ImGui::SetNextItemOpen(true);
-  bool open = ImGui::TreeNodeEx("##n", flags, "#%u %s", id, snap->name.c_str());
+  const std::string label =
+      app.treeShortNames ? shortLayerName(snap->name) : snap->name;
+  bool open = ImGui::TreeNodeEx("##n", flags, "#%u %s", id, label.c_str());
   if (selected && app.scrollTreeToSelection) {
     ImGui::SetScrollHereY(0.5f);
     app.scrollTreeToSelection = false;
@@ -518,21 +566,51 @@ void DrawLayerTreeNode(const layerviewer::CapturedFrame &frame, uint32_t id,
     app.selectedLayerId = id;
   if (open) {
     for (uint32_t childId : children)
-      DrawLayerTreeNode(frame, childId, app, flat);
+      DrawLayerTreeNode(frame, childId, app, flat, keep);
     ImGui::TreePop();
   }
   ImGui::PopID();
 }
 
+// Build the set of ids to keep when "only visible" is on: every visible
+// layer plus all of its ancestors (so the tree shape is preserved).
+std::unordered_set<uint32_t>
+BuildVisibleKeepSet(const layerviewer::CapturedFrame &frame) {
+  std::unordered_set<uint32_t> keep;
+  keep.reserve(frame.snapshots.size());
+  for (const auto &snap : frame.snapshots) {
+    if (!snap.isVisible)
+      continue;
+    uint32_t id = static_cast<uint32_t>(snap.path.id);
+    while (id != kUnassignedLayerId && !keep.count(id)) {
+      keep.insert(id);
+      auto it = frame.parentByLayerId.find(id);
+      if (it == frame.parentByLayerId.end())
+        break;
+      id = it->second;
+    }
+  }
+  return keep;
+}
+
 void DrawLayerTreePane(const layerviewer::CapturedFrame &frame, AppState &app) {
+  ImGui::Checkbox("only visible", &app.treeOnlyVisible);
+  ImGui::SameLine();
+  ImGui::Checkbox("short names", &app.treeShortNames);
   if (frame.snapshots.empty()) {
     ImGui::TextUnformatted("(no layers in this frame)");
     return;
   }
+  std::unordered_set<uint32_t> keepStorage;
+  const std::unordered_set<uint32_t> *keep = nullptr;
+  if (app.treeOnlyVisible) {
+    keepStorage = BuildVisibleKeepSet(frame);
+    keep = &keepStorage;
+  }
   std::vector<uint32_t> visible;
   visible.reserve(frame.snapshots.size());
   for (uint32_t rootId : frame.rootIds)
-    DrawLayerTreeNode(frame, rootId, app, visible);
+    DrawLayerTreeNode(frame, rootId, app, visible, keep);
 
   // Up/Down arrow selection when the Layers window is focused. Walks the
   // same flat list that was just rendered, so collapsed branches are
@@ -581,55 +659,185 @@ void DrawInspector(const layerviewer::CapturedFrame &frame,
   uint32_t parentId =
       parentIt != frame.parentByLayerId.end() ? parentIt->second : UINT32_MAX;
 
-  if (ImGui::BeginTable("inspector", 2,
-                        ImGuiTableFlags_SizingStretchProp |
-                            ImGuiTableFlags_RowBg)) {
-    auto row = [](const char *k, const std::string &v) {
-      ImGui::TableNextRow();
-      ImGui::TableSetColumnIndex(0);
-      ImGui::TextUnformatted(k);
-      ImGui::TableSetColumnIndex(1);
-      ImGui::TextUnformatted(v.c_str());
-    };
-    auto rowLine = [](const char *k, const std::string &v) {
-      ImGui::TableNextRow();
-      ImGui::TableSetColumnIndex(0);
-      ImGui::TextUnformatted(k);
-      ImGui::TableSetColumnIndex(1);
-      ImGui::TextUnformatted(v.c_str());
-    };
-
-    row("name", snap->name);
-    rowLine("id", std::to_string(app.selectedLayerId));
-    rowLine("parent", parentId == UINT32_MAX ? std::string("-")
-                                             : std::to_string(parentId));
-    rowLine("globalZ", std::to_string(snap->globalZ));
-    rowLine("layerStack", std::to_string(snap->outputFilter.layerStack.id));
-    rowLine("visible", snap->isVisible ? "yes" : "no");
-    rowLine("hiddenByPolicy", snap->isHiddenByPolicyFromParent ? "yes" : "no");
-    rowLine("contentOpaque", snap->contentOpaque ? "yes" : "no");
-    rowLine("isOpaque", snap->isOpaque ? "yes" : "no");
-    rowLine("bounds",
-            android::base::StringPrintf(
-                "(%.1f, %.1f) → (%.1f, %.1f)", snap->geomLayerBounds.left,
-                snap->geomLayerBounds.top, snap->geomLayerBounds.right,
-                snap->geomLayerBounds.bottom));
-    rowLine("color",
-            android::base::StringPrintf("r=%.2f g=%.2f b=%.2f a=%.2f",
-                                        static_cast<float>(snap->color.r),
-                                        static_cast<float>(snap->color.g),
-                                        static_cast<float>(snap->color.b),
-                                        static_cast<float>(snap->color.a)));
-    rowLine("alpha", android::base::StringPrintf(
-                         "%.2f", static_cast<float>(snap->alpha)));
-    if (snap->externalTexture) {
-      rowLine("bufferId", std::to_string(snap->externalTexture->getId()));
-      rowLine("bufferSize", android::base::StringPrintf(
-                                "%u x %u", snap->externalTexture->getWidth(),
-                                snap->externalTexture->getHeight()));
-      rowLine("frameNumber", std::to_string(snap->frameNumber));
+  // Helpers: a collapsible section containing a two-column key/value table.
+  auto section =
+      [](const char *label, bool defaultOpen,
+         std::initializer_list<std::pair<const char *, std::string>> rows) {
+        ImGuiTreeNodeFlags flags =
+            defaultOpen ? ImGuiTreeNodeFlags_DefaultOpen : 0;
+        if (!ImGui::CollapsingHeader(label, flags))
+          return;
+        if (!ImGui::BeginTable(label, 2,
+                               ImGuiTableFlags_SizingStretchProp |
+                                   ImGuiTableFlags_RowBg))
+          return;
+        for (const auto &r : rows) {
+          ImGui::TableNextRow();
+          ImGui::TableSetColumnIndex(0);
+          ImGui::TextUnformatted(r.first);
+          ImGui::TableSetColumnIndex(1);
+          ImGui::TextUnformatted(r.second.c_str());
+        }
+        ImGui::EndTable();
+      };
+  auto yn = [](bool b) -> std::string { return b ? "yes" : "no"; };
+  auto rectStr = [](const android::Rect &r) -> std::string {
+    return android::base::StringPrintf("(%d, %d) -> (%d, %d)  [%dx%d]", r.left,
+                                       r.top, r.right, r.bottom, r.width(),
+                                       r.height());
+  };
+  auto floatRectStr = [](const android::FloatRect &r) -> std::string {
+    return android::base::StringPrintf(
+        "(%.1f, %.1f) -> (%.1f, %.1f)  [%.1fx%.1f]", r.left, r.top, r.right,
+        r.bottom, r.right - r.left, r.bottom - r.top);
+  };
+  auto xformStr = [](const android::ui::Transform &t) -> std::string {
+    return android::base::StringPrintf("dsdx=%.3f dtdx=%.3f tx=%.1f\n"
+                                       "dtdy=%.3f dsdy=%.3f ty=%.1f",
+                                       t.dsdx(), t.dtdx(), t.tx(), t.dtdy(),
+                                       t.dsdy(), t.ty());
+  };
+  auto reachStr = [](decltype(snap->reachablilty) r) -> std::string {
+    using R = decltype(snap->reachablilty);
+    switch (r) {
+    case R::Reachable:
+      return "reachable";
+    case R::Unreachable:
+      return "unreachable";
+    case R::ReachableByRelativeParent:
+      return "via relative parent";
     }
-    ImGui::EndTable();
+    return "?";
+  };
+
+  ImGui::TextWrapped("%s", snap->name.c_str());
+  ImGui::TextDisabled("#%u  globalZ=%zu  sequence=%d  unique=%u",
+                      app.selectedLayerId, snap->globalZ, snap->sequence,
+                      snap->uniqueSequence);
+
+  section("Identity", true,
+          {
+              {"id", std::to_string(app.selectedLayerId)},
+              {"parent", parentId == UINT32_MAX ? std::string("-")
+                                                : std::to_string(parentId)},
+              {"sequence", std::to_string(snap->sequence)},
+              {"uniqueSequence", std::to_string(snap->uniqueSequence)},
+              {"globalZ", std::to_string(snap->globalZ)},
+              {"layerStack", std::to_string(snap->outputFilter.layerStack.id)},
+              {"uid", std::to_string(snap->uid.val())},
+              {"pid", std::to_string(snap->pid.val())},
+              {"debugName", snap->debugName},
+          });
+
+  section(
+      "Visibility", true,
+      {
+          {"isVisible", yn(snap->isVisible)},
+          {"reachablilty", reachStr(snap->reachablilty)},
+          {"hiddenByPolicyFromParent", yn(snap->isHiddenByPolicyFromParent)},
+          {"hiddenByPolicyFromRelativeParent",
+           yn(snap->isHiddenByPolicyFromRelativeParent)},
+          {"contentDirty", yn(snap->contentDirty)},
+          {"hasReadyFrame", yn(snap->hasReadyFrame)},
+          {"isOpaque", yn(snap->isOpaque)},
+          {"contentOpaque", yn(snap->contentOpaque)},
+          {"layerOpaqueFlagSet", yn(snap->layerOpaqueFlagSet)},
+          {"isSecure", yn(snap->isSecure)},
+          {"forceClientComposition", yn(snap->forceClientComposition)},
+          {"isSmallDirty", yn(snap->isSmallDirty)},
+          {"reason", snap->getIsVisibleReason()},
+      });
+
+  section("Geometry", true,
+          {
+              {"transformedBounds", floatRectStr(snap->transformedBounds)},
+              {"geomLayerBounds", floatRectStr(snap->geomLayerBounds)},
+              {"geomLayerCrop", floatRectStr(snap->geomLayerCrop)},
+              {"geomCrop", floatRectStr(snap->geomCrop)},
+              {"geomContentCrop", rectStr(snap->geomContentCrop)},
+              {"bufferSize", rectStr(snap->bufferSize)},
+              {"croppedBufferSize", floatRectStr(snap->croppedBufferSize)},
+              {"geomBufferSize", rectStr(snap->geomBufferSize)},
+              {"cursorFrame", rectStr(snap->cursorFrame)},
+              {"geomLayerTransform", xformStr(snap->geomLayerTransform)},
+              {"localTransform", xformStr(snap->localTransform)},
+              {"parentTransform", xformStr(snap->parentTransform)},
+              {"geomBufferTransform",
+               android::base::StringPrintf("0x%x", snap->geomBufferTransform)},
+              {"bufferTransform",
+               android::base::StringPrintf("0x%x", snap->geomBufferTransform)},
+              {"invalidTransform", yn(snap->invalidTransform)},
+              {"geomUsesSourceCrop", yn(snap->geomUsesSourceCrop)},
+              {"geomBufferUsesDisplayInverseTransform",
+               yn(snap->geomBufferUsesDisplayInverseTransform)},
+          });
+
+  section(
+      "Color / Blending", true,
+      {
+          {"color",
+           android::base::StringPrintf("r=%.2f g=%.2f b=%.2f a=%.2f",
+                                       static_cast<float>(snap->color.r),
+                                       static_cast<float>(snap->color.g),
+                                       static_cast<float>(snap->color.b),
+                                       static_cast<float>(snap->color.a))},
+          {"alpha", android::base::StringPrintf(
+                        "%.2f", static_cast<float>(snap->alpha))},
+          {"dataspace", android::base::StringPrintf(
+                            "0x%x", static_cast<uint32_t>(snap->dataspace))},
+          {"dimmingEnabled", yn(snap->dimmingEnabled)},
+          {"colorTransformIsIdentity", yn(snap->colorTransformIsIdentity)},
+          {"premultipliedAlpha", yn(snap->premultipliedAlpha)},
+          {"cornerRadius", android::base::StringPrintf(
+                               "x=%.2f y=%.2f", snap->roundedCorner.radius.x,
+                               snap->roundedCorner.radius.y)},
+          {"cornerCrop", floatRectStr(snap->roundedCorner.cropRect)},
+          {"backgroundBlurRadius", std::to_string(snap->backgroundBlurRadius)},
+          {"blurRegions", std::to_string(snap->blurRegions.size())},
+      });
+
+  if (snap->externalTexture) {
+    section("Buffer", true,
+            {
+                {"id", std::to_string(snap->externalTexture->getId())},
+                {"size", android::base::StringPrintf(
+                             "%ux%u", snap->externalTexture->getWidth(),
+                             snap->externalTexture->getHeight())},
+                {"pixelFormat",
+                 std::to_string(snap->externalTexture->getPixelFormat())},
+                {"usage",
+                 android::base::StringPrintf(
+                     "0x%llx",
+                     (unsigned long long)snap->externalTexture->getUsage())},
+                {"frameNumber", std::to_string(snap->frameNumber)},
+                {"hasProtectedContent", yn(snap->hasProtectedContent)},
+            });
+  }
+
+  section(
+      "Input", false,
+      {
+          {"hasInputInfo", yn(snap->hasInputInfo())},
+          {"canReceiveInput", yn(snap->canReceiveInput())},
+          {"touchableRegion bounds",
+           rectStr(snap->inputInfo.touchableRegion.getBounds())},
+          {"frame", rectStr(snap->inputInfo.frame)},
+          {"globalScaleFactor", android::base::StringPrintf(
+                                    "%.3f", snap->inputInfo.globalScaleFactor)},
+          {"surfaceInset", std::to_string(snap->inputInfo.surfaceInset)},
+          {"token", snap->inputInfo.token ? "yes" : "no"},
+          {"dropInputMode",
+           std::to_string(static_cast<int>(snap->dropInputMode))},
+          {"trustedOverlay",
+           std::to_string(static_cast<int>(snap->trustedOverlay))},
+      });
+
+  // getDebugString is SF's own structured dump — keep it around for
+  // anything the section rows don't cover (damage region, shadows,
+  // metadata keys, etc.).
+  if (ImGui::CollapsingHeader("Debug string")) {
+    std::string s = snap->getDebugString();
+    ImGui::TextWrapped("%s", s.c_str());
   }
 }
 
@@ -645,17 +853,22 @@ void DrawTimeline(AppState &app) {
   const auto &frames = app.trace->frames;
   const int n = static_cast<int>(frames.size());
 
+  // Fixed-width controls first so their X positions don't shift with the
+  // varying width of the frame/vsync/ts label. Variable-width text lives
+  // at the end of the row where growth only moves nothing after it.
+  if (ImGui::Button("prev frame"))
+    app.frameIndex = std::max(0, app.frameIndex - 1);
+  if (ImGui::IsItemHovered())
+    ImGui::SetTooltip("Previous frame (left arrow)");
+  ImGui::SameLine();
+  if (ImGui::Button("next frame"))
+    app.frameIndex = std::min(n - 1, app.frameIndex + 1);
+  if (ImGui::IsItemHovered())
+    ImGui::SetTooltip("Next frame (right arrow)");
+  ImGui::SameLine();
   ImGui::Text("Frame %d / %d   vsync=%lld   ts=%.3fs", app.frameIndex + 1, n,
               (long long)frames[app.frameIndex].vsyncId,
               frames[app.frameIndex].tsNs / 1e9);
-  ImGui::SameLine();
-  ImGui::Checkbox("show invisible", &app.showInvisible);
-  ImGui::SameLine();
-  if (ImGui::Button("<"))
-    app.frameIndex = std::max(0, app.frameIndex - 1);
-  ImGui::SameLine();
-  if (ImGui::Button(">"))
-    app.frameIndex = std::min(n - 1, app.frameIndex + 1);
 
   // The strip: a tall InvisibleButton we draw over.
   ImVec2 avail = ImGui::GetContentRegionAvail();
@@ -857,6 +1070,8 @@ void DrawWireframe(const layerviewer::CapturedFrame &frame, AppState &app) {
   ImGui::PushItemWidth(160);
   ImGui::SliderFloat("spacing", &app.wireframe3D.depthSpacing, 0.f, 800.f,
                      "%.0fpx");
+  ImGui::SameLine();
+  ImGui::SliderFloat("opacity", &app.wireframe3D.opacity, 0.f, 1.f, "%.2f");
   ImGui::PopItemWidth();
 
   ImVec2 avail = ImGui::GetContentRegionAvail();
@@ -1000,10 +1215,12 @@ void DrawWireframe(const layerviewer::CapturedFrame &frame, AppState &app) {
   // that both stay legible on the dark background. Per-layer identity
   // (checkerboard + buffer-id watermark) lives in the Skia preview
   // instead, where it'll be replaced by real RenderEngine output.
-  const ImU32 fillVisible = IM_COL32(0x4e, 0xc9, 0xb0, 180);   // mint
+  const uint8_t fillA = static_cast<uint8_t>(
+      std::clamp(app.wireframe3D.opacity, 0.f, 1.f) * 255.f + 0.5f);
+  const ImU32 fillVisible = IM_COL32(0x4e, 0xc9, 0xb0, fillA);
   const ImU32 strokeVisible = IM_COL32(0x2e, 0x8b, 0x77, 255); // deeper mint
-  const ImU32 fillHidden = IM_COL32(0xd6, 0x7a, 0x4a, 150);    // warm coral
-  const ImU32 strokeHidden = IM_COL32(0x9a, 0x4e, 0x2a, 220);  // deeper coral
+  const ImU32 fillHidden = IM_COL32(0xd6, 0x7a, 0x4a, fillA);
+  const ImU32 strokeHidden = IM_COL32(0x9a, 0x4e, 0x2a, 220); // deeper coral
 
   // Draw far → near.
   for (const auto &p : projs) {
@@ -1354,6 +1571,15 @@ int main(int argc, char **argv) {
     if ((io.KeyCtrl || io.KeySuper) && ImGui::IsKeyPressed(ImGuiKey_O, false))
       OpenFileDialog(window, app);
 
+    // Inspector before Trace Info so it wins the default-active-tab for the
+    // "right" dock node (tab order follows Begin-call order within the same
+    // docked node, not DockBuilderDockWindow order).
+    if (ImGui::Begin("Inspector")) {
+      if (app.trace && !app.trace->frames.empty())
+        DrawInspector(app.trace->frames[app.frameIndex], app);
+    }
+    ImGui::End();
+
     if (ImGui::Begin("Trace Info")) {
       if (!app.trace) {
         ImGui::TextUnformatted(
@@ -1384,12 +1610,6 @@ int main(int argc, char **argv) {
     if (ImGui::Begin("Layers")) {
       if (app.trace && !app.trace->frames.empty())
         DrawLayerTreePane(app.trace->frames[app.frameIndex], app);
-    }
-    ImGui::End();
-
-    if (ImGui::Begin("Inspector")) {
-      if (app.trace && !app.trace->frames.empty())
-        DrawInspector(app.trace->frames[app.frameIndex], app);
     }
     ImGui::End();
 
