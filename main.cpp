@@ -284,6 +284,13 @@ struct LayerViewerCompositor {
     baseLayers.reserve(layerSettings.size());
     for (const auto &ls : layerSettings)
       baseLayers.push_back(ls);
+    // ImGui leaves glViewport at the window's drawable size (smaller than a
+    // phone-sized output buffer on a typical macOS window). Ganesh caches GL
+    // state and assumes no one else touched it, so binding the output FBO
+    // does *not* re-issue glViewport — the stale small viewport clips
+    // composition to just the top rows of the 1080×2400 output. Explicitly
+    // set viewport to the full output dimensions before handing off to RE.
+    glViewport(0, 0, outputW, outputH);
     re->drawLayers(displaySettings, baseLayers, outputTexture,
                    android::base::unique_fd{});
 
@@ -891,7 +898,12 @@ void DrawWireframe(const layerviewer::CapturedFrame &frame, AppState &app) {
   for (const auto &snap : frame.snapshots) {
     if (!app.showInvisible && !snap.isVisible)
       continue;
-    const auto &b = snap.geomLayerBounds;
+    // transformedBounds = geomLayerTransform * geomLayerBounds — the actual
+    // on-screen rect. geomLayerBounds alone is the buffer-sized rect in the
+    // layer's local space, so using it would ignore per-frame translate/
+    // scale/rotate from the transaction (e.g. a 1080×63 taskbar buffer that
+    // lives at y=2337 would be drawn at y=0).
+    const auto &b = snap.transformedBounds;
     if (b.right <= b.left || b.bottom <= b.top)
       continue;
     if (b.left < 0 || b.top < 0 || b.right > cw || b.bottom > ch)
@@ -942,8 +954,11 @@ void DrawWireframe(const layerviewer::CapturedFrame &frame, AppState &app) {
   std::vector<Proj> projs;
   projs.reserve(layers.size());
   for (size_t k = 0; k < layers.size(); k++) {
-    const auto &b = layers[k]->geomLayerBounds;
-    float z = static_cast<float>(k) * kDepthSpacing;
+    const auto &b = layers[k]->transformedBounds;
+    // Foreground (high paint rank) at z=0; background at z=max. Camera
+    // looks from +z toward the display plane, so foreground sits closer.
+    // Paint-order rank 0 is the background → gets the largest z.
+    float z = static_cast<float>(layers.size() - 1 - k) * kDepthSpacing;
     Proj p;
     p.l = layers[k];
     p.rank = static_cast<int>(k);
@@ -960,12 +975,13 @@ void DrawWireframe(const layerviewer::CapturedFrame &frame, AppState &app) {
   }
   // Sort by RANK, not by post-rotation viewZ of the center. Center-based
   // sort wobbled when a layer's (x, y) contribution to viewZ swamped the
-  // rank delta for adjacent layers. Yaw is clamped to ±85° so the stack
-  // direction is stable — largest rank first (farthest back in painter's
-  // sense), rank 0 drawn last (visually on top in overlap). Hit-testing
-  // iterates projs in reverse so the frontmost drawn quad wins.
+  // rank delta for adjacent layers. Yaw is clamped to ±85° so stack
+  // direction is stable. Rank 0 = background (z = max, farthest from
+  // camera), rank N-1 = foreground (z = 0, closest). Painter's: draw far
+  // first, near last — ascending rank. Hit-testing iterates projs in
+  // reverse (rbegin→rend) so the frontmost quad wins.
   std::sort(projs.begin(), projs.end(),
-            [](const Proj &a, const Proj &b) { return a.rank > b.rank; });
+            [](const Proj &a, const Proj &b) { return a.rank < b.rank; });
 
   // Hit-test first, in near→far order (projs is far→near, so iterate back).
   uint32_t hoverId = kUnassignedLayerId;
@@ -1004,7 +1020,7 @@ void DrawWireframe(const layerviewer::CapturedFrame &frame, AppState &app) {
     if (const Snap *snap = frame.snapshot(hoverId)) {
       ImGui::BeginTooltip();
       ImGui::Text("#%u %s", hoverId, snap->name.c_str());
-      const auto &b = snap->geomLayerBounds;
+      const auto &b = snap->transformedBounds;
       ImGui::Text("bounds: (%.1f, %.1f) → (%.1f, %.1f)", b.left, b.top, b.right,
                   b.bottom);
       ImGui::Text("globalZ=%zu  alpha=%.2f", snap->globalZ,
