@@ -613,8 +613,13 @@ void DrawLayerTreePane(const layerviewer::CapturedFrame &frame, AppState &app) {
   }
   std::vector<uint32_t> visible;
   visible.reserve(frame.snapshots.size());
+  // Default ImGui indent is 21px/level — a 10-deep AOSP layer hierarchy
+  // easily eats 200+ pixels of horizontal space before the label even
+  // starts. Shrink to 12px for the tree only.
+  ImGui::PushStyleVar(ImGuiStyleVar_IndentSpacing, 12.f);
   for (uint32_t rootId : frame.rootIds)
     DrawLayerTreeNode(frame, rootId, app, visible, keep);
+  ImGui::PopStyleVar();
 
   // Up/Down arrow selection when the Layers window is focused. Walks the
   // same flat list that was just rendered, so collapsed branches are
@@ -1991,7 +1996,13 @@ int main(int argc, char **argv) {
     }
     ImGui::End();
 
-    if (ImGui::Begin("Layers")) {
+    // HorizontalScrollbar: long layer paths (full FQCN + #id) exceed the
+    // panel width easily. Without this flag the WorkRect's right edge is
+    // pinned to the visible window, so SpanAvailWidth selections stop
+    // short and any text past the edge is simply clipped. With it,
+    // WorkRect grows with content, the selection highlight reaches the
+    // end of the widest row, and we get a real scrollbar.
+    if (ImGui::Begin("Layers", nullptr, ImGuiWindowFlags_HorizontalScrollbar)) {
       if (app.trace && !app.trace->frames.empty())
         DrawLayerTreePane(app.trace->frames[app.frameIndex], app);
     }
