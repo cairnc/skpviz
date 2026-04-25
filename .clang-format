@@ -1,0 +1,21 @@
+---
+BasedOnStyle: LLVM
+ColumnLimit: 80
+IndentWidth: 4
+TabWidth: 4
+UseTab: Never
+AccessModifierOffset: -4
+ContinuationIndentWidth: 4
+AllowShortFunctionsOnASingleLine: Inline
+AllowShortIfStatementsOnASingleLine: Never
+AllowShortLoopsOnASingleLine: false
+BreakBeforeBraces: Attach
+SpaceBeforeParens: ControlStatements
+SortIncludes: false
+DerivePointerAlignment: false
+PointerAlignment: Right
+Cpp11BracedListStyle: true
+BinPackArguments: true
+BinPackParameters: true
+AlwaysBreakTemplateDeclarations: Yes
+...

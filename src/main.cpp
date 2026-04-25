@@ -351,10 +351,12 @@ struct AppState {
     // a slice or starts a new measurement.
     int64_t measureStartNs = -1;
     int64_t measureEndNs = -1;
-    // True between the mouse-down on the ruler and the matching mouse-up.
-    // Tracked explicitly (rather than via IsItemActive) so the drag
-    // continues even when the cursor leaves the ruler band.
+    // True between the mouse-down on the timeline and the matching mouse-up.
+    // Mouse-down anywhere on the timeline starts a measurement; on
+    // release, a tiny drag is reinterpreted as a slice click instead.
     bool measuring = false;
+    float measureDownX = 0.f; // mouse x at the click that started the drag
+    float measureDownY = 0.f; // mouse y at click — anchors the label vertically
     // Timeline hover — captured each frame while the user is over the strip,
     // read one frame later to render an info line above the strip. Using
     // last-frame's value avoids a two-pass layout.
@@ -1602,7 +1604,6 @@ void DrawTimeline(AppState &app) {
     int hoverFrameIdx = -1;
     int hoverTxnIdx = -1;
     bool anyTimelineHovered = false;
-    bool anyTimelineClicked = false; // left-click fell on a timeline cell
     const ImVec2 mouse = ImGui::GetMousePos();
 
     // Cache the timeline cell geometry so the pan/zoom math below (outside
@@ -1610,6 +1611,10 @@ void DrawTimeline(AppState &app) {
     // cells. Captured in the ruler cell (first row, col 2).
     float timelineCellW = 0.f;
     float timelineCellLeft = 0.f;
+    // Y span of the timeline content (ruler top → last track bottom).
+    // Used to clip the measurement overlay so its guides don't bleed
+    // into the toolbar above or whitespace below.
+    float timelineTopY = 0.f;
 
     ImGuiTableFlags tflags = ImGuiTableFlags_Resizable |
                              ImGuiTableFlags_BordersInnerV |
@@ -1641,6 +1646,7 @@ void DrawTimeline(AppState &app) {
         float cellW = ImGui::GetContentRegionAvail().x;
         timelineCellW = std::max(8.f, cellW);
         timelineCellLeft = cellTL.x;
+        timelineTopY = cellTL.y;
 
         // Rescale the horizontal scroll when the cell width changes (e.g.
         // a vertical resize made the window grow/lose its scrollbar) so
@@ -1661,28 +1667,6 @@ void DrawTimeline(AppState &app) {
         app.timelineScrollX = std::clamp(app.timelineScrollX, 0.f,
                                          std::max(0.f, virtW - timelineCellW));
         const float scrollX = app.timelineScrollX;
-
-        // Click-and-drag measurement on the ruler. We capture both
-        // endpoints in ns so the markers track scroll/zoom changes
-        // mid-drag (and stay correct after release).
-        auto rulerNsAtMouse = [&]() {
-            float mx = std::clamp(mouse.x - cellTL.x, 0.f, timelineCellW);
-            return t0Ns + static_cast<int64_t>((double(scrollX) + double(mx)) *
-                                               double(totalNs) / double(virtW));
-        };
-        if (rulerHovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
-            int64_t ns = rulerNsAtMouse();
-            app.measureStartNs = ns;
-            app.measureEndNs = ns;
-            app.measuring = true;
-        }
-        if (app.measuring) {
-            if (ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
-                app.measureEndNs = rulerNsAtMouse();
-            } else {
-                app.measuring = false;
-            }
-        }
 
         ImDrawList *dl = ImGui::GetWindowDrawList();
         dl->PushClipRect(
@@ -1916,8 +1900,6 @@ void DrawTimeline(AppState &app) {
         ImGui::InvisibleButton("##row", ImVec2(timelineCellW, trackH));
         bool rowHovered = ImGui::IsItemHovered();
         anyTimelineHovered = anyTimelineHovered || rowHovered;
-        bool rowClicked =
-            rowHovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left);
         ImGui::PopID();
 
         const float scrollX = app.timelineScrollX; // clamped in ruler cell
@@ -1953,8 +1935,6 @@ void DrawTimeline(AppState &app) {
                 if (DrawTimelineSlice(row, f.tsNs, col, label, isCurrent,
                                       isLinked, p.depth)) {
                     hoverFrameIdx = p.idx;
-                    if (rowClicked)
-                        anyTimelineClicked = true;
                 }
             }
         } else {
@@ -1974,8 +1954,6 @@ void DrawTimeline(AppState &app) {
                 if (DrawTimelineSlice(row, t.postTimeNs, col, label, isCurrent,
                                       isLinked, p.depth)) {
                     hoverTxnIdx = p.idx;
-                    if (rowClicked)
-                        anyTimelineClicked = true;
                 }
             }
         }
@@ -1992,11 +1970,67 @@ void DrawTimeline(AppState &app) {
         dl->PopClipRect();
     }
 
+    // Bottom Y of the timeline content (right after the table) — used
+    // below to clip the measurement overlay so guides only span the
+    // tracks, not the toolbar above or the empty area below.
+    float timelineBotY = ImGui::GetCursorScreenPos().y;
+
     ImGui::EndTable();
     ImGui::PopStyleVar();
 
-    // Measurement overlay. Drawn after EndTable so the vertical lines
-    // can span every track row (no per-cell clip in scope here).
+    // --- Measurement input + overlay ---------------------------------------
+    // Mouse-down anywhere on the timeline starts a measurement. On
+    // mouse-up, a tiny drag (< 3px) is reinterpreted as a click and
+    // routes to slice selection instead — so casual clicks still work
+    // the same as before, but drags read as a measurement.
+    auto timelineNsAtMouseX = [&]() {
+        float mx = std::clamp(mouse.x - timelineCellLeft, 0.f, timelineCellW);
+        return t0Ns +
+               static_cast<int64_t>((double(app.timelineScrollX) + double(mx)) *
+                                    double(totalNs) / double(virtW));
+    };
+    if (anyTimelineHovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
+        int64_t ns = timelineNsAtMouseX();
+        app.measureStartNs = ns;
+        app.measureEndNs = ns;
+        app.measuring = true;
+        app.measureDownX = mouse.x;
+        app.measureDownY = mouse.y;
+    }
+    bool clickReleased = false;
+    if (app.measuring) {
+        if (ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
+            app.measureEndNs = timelineNsAtMouseX();
+        } else {
+            app.measuring = false;
+            float dragPx = std::abs(mouse.x - app.measureDownX);
+            if (dragPx < 3.f) {
+                // It was a click, not a drag — fall through to slice
+                // selection below and clear the measurement.
+                app.measureStartNs = -1;
+                app.measureEndNs = -1;
+                clickReleased = true;
+            }
+        }
+    }
+    // Slice selection on click (mouse-up with no drag).
+    if (clickReleased) {
+        if (hoverFrameIdx >= 0) {
+            app.frameIndex = hoverFrameIdx;
+            app.manualSelect = AppState::ManualSelect::Frame;
+        } else if (hoverTxnIdx >= 0) {
+            app.selectedTransactionIdx = hoverTxnIdx;
+            app.manualSelect = AppState::ManualSelect::Txn;
+            if (app.autoSyncTimeline)
+                app.frameIndex = static_cast<int>(txns[hoverTxnIdx].frameIndex);
+            RaiseDockedTab("Transaction Inspector");
+        }
+    }
+
+    // Overlay drawn after EndTable so the vertical guides can span every
+    // track row. Clipped to the timeline content rect (ruler top →
+    // last-track bottom, column 3 only) so it doesn't bleed into the
+    // toolbar above or the gap below.
     if (app.measureStartNs >= 0 && app.measureStartNs != app.measureEndNs) {
         int64_t a = std::min(app.measureStartNs, app.measureEndNs);
         int64_t b = std::max(app.measureStartNs, app.measureEndNs);
@@ -2007,26 +2041,57 @@ void DrawTimeline(AppState &app) {
         float xb =
             timelineCellLeft - app.timelineScrollX +
             static_cast<float>(double(b - t0Ns) / double(totalNs) * virtWLocal);
-        ImVec2 wpos = ImGui::GetWindowPos();
-        ImVec2 wsize = ImGui::GetWindowSize();
-        float top = wpos.y;
-        float bot = wpos.y + wsize.y;
         ImDrawList *dl = ImGui::GetWindowDrawList();
+        ImVec2 clipMin(timelineCellLeft, timelineTopY);
+        ImVec2 clipMax(timelineCellLeft + timelineCellW, timelineBotY);
+        dl->PushClipRect(clipMin, clipMax, true);
         const ImU32 line = IM_COL32(255, 230, 120, 230);
         const ImU32 fill = IM_COL32(255, 230, 120, 25);
-        // Translucent fill between the two lines makes the range obvious
-        // even when both endpoints scroll out together.
-        dl->AddRectFilled(ImVec2(xa, top), ImVec2(xb, bot), fill);
-        dl->AddLine(ImVec2(xa, top), ImVec2(xa, bot), line, 1.f);
-        dl->AddLine(ImVec2(xb, top), ImVec2(xb, bot), line, 1.f);
+        dl->AddRectFilled(ImVec2(xa, timelineTopY), ImVec2(xb, timelineBotY),
+                          fill);
+        dl->AddLine(ImVec2(xa, timelineTopY), ImVec2(xa, timelineBotY), line,
+                    1.f);
+        dl->AddLine(ImVec2(xb, timelineTopY), ImVec2(xb, timelineBotY), line,
+                    1.f);
+
+        // Arrow-bracket span anchored vertically at the mouse-down y so
+        // it stays where the user grabbed it, clamped into the visible
+        // timeline rect so it can't slide offscreen after scrolling.
         std::string label = FormatNs(double(b - a), 1);
         ImVec2 ts = ImGui::CalcTextSize(label.c_str());
-        ImVec2 lp((xa + xb) * 0.5f - ts.x * 0.5f, top + 2.f);
-        // Background pill so the label is readable against any track.
-        dl->AddRectFilled(ImVec2(lp.x - 4, lp.y - 1),
-                          ImVec2(lp.x + ts.x + 4, lp.y + ts.y + 1),
+        float midX = (xa + xb) * 0.5f;
+        float labelLeft = midX - ts.x * 0.5f;
+        float labelRight = midX + ts.x * 0.5f;
+        float labelY =
+            std::clamp(app.measureDownY - ts.y * 0.5f, timelineTopY + 2.f,
+                       timelineBotY - ts.y - 2.f);
+        float arrowY = labelY + ts.y * 0.5f;
+        dl->AddRectFilled(ImVec2(labelLeft - 5.f, labelY - 1.f),
+                          ImVec2(labelRight + 5.f, labelY + ts.y + 1.f),
                           IM_COL32(20, 20, 25, 220));
-        dl->AddText(lp, IM_COL32(255, 240, 200, 255), label.c_str());
+        dl->AddText(ImVec2(labelLeft, labelY), IM_COL32(255, 240, 200, 255),
+                    label.c_str());
+        // Min span to fit two arrowheads (6px each) flanking the label
+        // pill (ts.x + 10 of horizontal padding). Below that, just
+        // guides + label — arrows would overlap the pill.
+        const float kArrowW = 6.f;
+        const float kPillPadX = 5.f;
+        float minSpan = 2.f * kArrowW + ts.x + 2.f * kPillPadX;
+        if (xb - xa >= minSpan) {
+            if (xa + 8.f < labelLeft - 7.f)
+                dl->AddLine(ImVec2(xa + 6.f, arrowY),
+                            ImVec2(labelLeft - 7.f, arrowY), line, 1.f);
+            if (labelRight + 7.f < xb - 8.f)
+                dl->AddLine(ImVec2(labelRight + 7.f, arrowY),
+                            ImVec2(xb - 6.f, arrowY), line, 1.f);
+            dl->AddTriangleFilled(ImVec2(xa, arrowY),
+                                  ImVec2(xa + 6.f, arrowY - 4.f),
+                                  ImVec2(xa + 6.f, arrowY + 4.f), line);
+            dl->AddTriangleFilled(ImVec2(xb, arrowY),
+                                  ImVec2(xb - 6.f, arrowY - 4.f),
+                                  ImVec2(xb - 6.f, arrowY + 4.f), line);
+        }
+        dl->PopClipRect();
     }
 
     // --- Input --------------------------------------------------------------
@@ -2075,23 +2140,8 @@ void DrawTimeline(AppState &app) {
             ImGui::SetScrollY(ImGui::GetScrollY() - wheelY * 60.f);
         }
 
-        if (anyTimelineClicked) {
-            // A click on a slice clears any sticky measurement —
-            // user has moved on to inspecting something else.
-            app.measureStartNs = -1;
-            app.measureEndNs = -1;
-            if (hoverFrameIdx >= 0) {
-                app.frameIndex = hoverFrameIdx;
-                app.manualSelect = AppState::ManualSelect::Frame;
-            } else if (hoverTxnIdx >= 0) {
-                app.selectedTransactionIdx = hoverTxnIdx;
-                app.manualSelect = AppState::ManualSelect::Txn;
-                if (app.autoSyncTimeline)
-                    app.frameIndex =
-                        static_cast<int>(txns[hoverTxnIdx].frameIndex);
-                RaiseDockedTab("Transaction Inspector");
-            }
-        }
+        // (Slice selection now handled via the click-vs-drag flow up
+        // before the input section — see the measurement overlay.)
 
         // Hover tooltip — full details for whichever slice the cursor is
         // on. Always on (no wait), so you don't need to zoom+squint to
