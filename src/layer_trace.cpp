@@ -318,6 +318,17 @@ std::unique_ptr<ReplayedTrace> LoadAndReplay(const std::string &path) {
             ct.vsyncId = tp.vsync_id();
             ct.postTimeNs = tp.post_time();
             ct.transactionId = tp.transaction_id();
+            // The TransactionState proto's `pid` field is optional and
+            // some producers leave it unset, dumping all those txns
+            // into a phantom "pid 0" track with apps mixed together.
+            // libgui builds transactionId as (pid << 32) | counter,
+            // so the high half is a reliable fallback.
+            if (ct.pid == 0) {
+                int32_t derivedPid =
+                    static_cast<int32_t>(ct.transactionId >> 32);
+                if (derivedPid > 0)
+                    ct.pid = derivedPid;
+            }
             ct.layerChanges = tp.layer_changes_size();
             ct.displayChanges = tp.display_changes_size();
             ct.affectedLayerIds.reserve(tp.layer_changes_size());

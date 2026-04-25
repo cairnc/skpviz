@@ -19,6 +19,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cstring>
+#include <limits>
 #include <memory>
 #include <set>
 #include <string>
@@ -350,6 +351,10 @@ struct AppState {
     // a slice or starts a new measurement.
     int64_t measureStartNs = -1;
     int64_t measureEndNs = -1;
+    // True between the mouse-down on the ruler and the matching mouse-up.
+    // Tracked explicitly (rather than via IsItemActive) so the drag
+    // continues even when the cursor leaves the ruler band.
+    bool measuring = false;
     // Timeline hover — captured each frame while the user is over the strip,
     // read one frame later to render an info line above the strip. Using
     // last-frame's value avoids a two-pass layout.
@@ -1471,7 +1476,11 @@ bool DrawTimelineSlice(const TimelineRow &r, int64_t ns, ImU32 col,
         return false;
     float yTop = r.cellTL.y + depth * r.rowH;
     float yBot = yTop + r.rowH;
-    r.dl->AddRectFilled(ImVec2(sx0, yTop + 2), ImVec2(sx1, yBot - 2), col);
+    // Margin scales with sub-row height so very thin rows (zoomed out)
+    // still get a visible fill instead of collapsing into the gap.
+    float margin = std::min(2.f, r.rowH * 0.15f);
+    r.dl->AddRectFilled(ImVec2(sx0, yTop + margin), ImVec2(sx1, yBot - margin),
+                        col);
     // Highlight: single bright stroke just outside the fill on the
     // dark track background. `isCurrent` wins over `isLinked` so the
     // user's actual pick is the most prominent border.
@@ -1485,8 +1494,8 @@ bool DrawTimelineSlice(const TimelineRow &r, int64_t ns, ImU32 col,
         // Clip the label to the slice rect so text from zoomed-in slices
         // can't bleed onto neighbours. ImDrawList intersects this with the
         // already-pushed row clip, so we still get the cell boundary too.
-        r.dl->PushClipRect(ImVec2(sx0 + 1, yTop + 2), ImVec2(sx1 - 1, yBot - 2),
-                           true);
+        r.dl->PushClipRect(ImVec2(sx0 + 1, yTop + margin),
+                           ImVec2(sx1 - 1, yBot - margin), true);
         r.dl->AddText(ImVec2(sx0 + 3, yTop + 3), PickReadableTextColor(col),
                       name.c_str());
         r.dl->PopClipRect();
@@ -1665,9 +1674,14 @@ void DrawTimeline(AppState &app) {
             int64_t ns = rulerNsAtMouse();
             app.measureStartNs = ns;
             app.measureEndNs = ns;
+            app.measuring = true;
         }
-        if (ImGui::IsItemActive()) {
-            app.measureEndNs = rulerNsAtMouse();
+        if (app.measuring) {
+            if (ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
+                app.measureEndNs = rulerNsAtMouse();
+            } else {
+                app.measuring = false;
+            }
         }
 
         ImDrawList *dl = ImGui::GetWindowDrawList();
@@ -1769,6 +1783,20 @@ void DrawTimeline(AppState &app) {
     const float virtW = timelineCellW * std::max(1.f, app.timelineZoom);
     const double nsPerPx = double(totalNs) / double(virtW);
 
+    // Sub-row height scales with zoom: full kRowH when zoomed in enough
+    // to read labels (visible <= 500ms), shrinking down to a thin band
+    // when way zoomed out — keeps tall stacked tracks from dominating
+    // the screen at trace-wide scales.
+    const double visibleNsForH =
+        double(totalNs) * double(timelineCellW) / double(virtW);
+    constexpr float kSubRowMin = 4.f;
+    constexpr double kFullAtNs = 500.0e6;
+    constexpr double kMinAtNs = 5.0e9;
+    const double tShrink = std::clamp(
+        (visibleNsForH - kFullAtNs) / (kMinAtNs - kFullAtNs), 0.0, 1.0);
+    const float subRowH = static_cast<float>(
+        double(kRowH) + tShrink * (kSubRowMin - double(kRowH)));
+
     // Viewport time range (with a generous pixel margin so partial
     // slices at the edges still get drawn). Events outside this range
     // are skipped entirely — no label format, no draw.
@@ -1792,16 +1820,17 @@ void DrawTimeline(AppState &app) {
     for (int ti = 0; ti < numTracks; ti++) {
         const auto &tr = tracks[ti];
 
-        // --- Phase 1: depth-stack the slices -------------------------------
-        // Slice duration is a fixed 1ms in time, so depth assignment
-        // depends only on each slice's timestamp — track row heights
-        // are zoom-independent and stop jumping around as you zoom.
+        // --- Phase 1: depth-stack the slices using a fixed 1ms time
+        // width per slice so each event's start time is preserved
+        // exactly. Greedy: each slice goes to the lowest sub-row
+        // whose tail end is <= this slice's start. Walks ALL slices
+        // (not just the viewport) so each slice's depth is a stable,
+        // global property.
         placements.clear();
         tailNs.clear();
         int maxDepth = 0;
         constexpr int64_t halfNs = kSliceDurationNs / 2;
-        auto place = [&](int idx, int64_t centerNs,
-                         const std::string & /*label*/) {
+        auto place = [&](int idx, int64_t centerNs) {
             int64_t startNs = centerNs - halfNs;
             int64_t endNs = centerNs + halfNs;
             int d = 0;
@@ -1814,24 +1843,31 @@ void DrawTimeline(AppState &app) {
             if (d > maxDepth)
                 maxDepth = d;
         };
-
-        // Depth is purely time-based and walks ALL slices in the track,
-        // not just the viewport — that way each slice's depth is a
-        // global property of the trace and doesn't shift when you pan.
-        // Viewport culling happens in phase 2 (the actual draw).
+        // Greedy depth assumes time-sorted input. Frames are already
+        // sorted (one per vsync); txns aren't guaranteed to be — SF
+        // can pack multiple producers' transactions into one trace
+        // entry in arrival order, not post order. Sort indices by
+        // postTimeNs before placing so unrelated txns don't get pushed
+        // onto deeper rows by an earlier-but-later-encountered neighbour.
         if (tr.pid == -1) {
             placements.reserve(n);
             for (int i = 0; i < n; i++)
-                place(i, frames[i].tsNs, std::string());
+                place(i, frames[i].tsNs);
         } else {
+            std::vector<int> sortedIdx;
             for (int i = 0; i < static_cast<int>(txns.size()); i++) {
                 if (txns[i].pid != tr.pid)
                     continue;
-                place(i, txns[i].postTimeNs, std::string());
+                sortedIdx.push_back(i);
             }
+            std::sort(sortedIdx.begin(), sortedIdx.end(), [&](int a, int b) {
+                return txns[a].postTimeNs < txns[b].postTimeNs;
+            });
+            for (int idx : sortedIdx)
+                place(idx, txns[idx].postTimeNs);
         }
 
-        const float trackH = (maxDepth + 1) * kRowH;
+        const float trackH = (maxDepth + 1) * subRowH;
         ImGui::TableNextRow(0, trackH);
 
         // Col 0: pin checkbox. Frames (pid -1) is always pinned so we
@@ -1895,15 +1931,14 @@ void DrawTimeline(AppState &app) {
         dl->PushClipRect(
             cellTL, ImVec2(cellTL.x + timelineCellW, cellTL.y + trackH), true);
 
-        // `rowH` here is the *sub-row* height — DrawTimelineSlice uses it
-        // together with each slice's `depth` to land in the right strip.
-        TimelineRow row{dl,    cellTL, timelineCellW, kRowH,      scrollX,
+        // `rowH` is the *sub-row* height — DrawTimelineSlice combines it
+        // with each placement's depth to land in the right strip.
+        TimelineRow row{dl,    cellTL, timelineCellW, subRowH,    scrollX,
                         virtW, t0Ns,   totalNs,       rowHovered, mouse};
 
         // --- Phase 2: draw using the precomputed depths --------------------
-        // Viewport culling happens here: depth is global, but the draw
-        // pass skips slices outside the visible time range so we don't
-        // pay for label formatting / drawlist ops we'd just clip out.
+        // Viewport culling here only — depths are global so panning
+        // doesn't reshuffle anyone's layer.
         if (tr.pid == -1) {
             for (const auto &p : placements) {
                 const layerviewer::CapturedFrame &f = frames[p.idx];
