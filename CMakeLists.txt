@@ -82,13 +82,13 @@ endif()
 
 add_subdirectory(third_party/aosp)
 
-add_executable(layerviewer main.cpp layer_trace.cpp)
+add_executable(layerviewer src/main.cpp src/layer_trace.cpp)
 target_link_libraries(layerviewer PRIVATE imgui SDL3::SDL3-static skia aosp)
 
-add_executable(make-fake-trace make_fake_trace.cpp)
+add_executable(make-fake-trace src/make_fake_trace.cpp)
 target_link_libraries(make-fake-trace PRIVATE aosp_perfetto_protos)
 
-add_executable(replay-trace replay_trace.cpp)
+add_executable(replay-trace src/replay_trace.cpp)
 target_link_libraries(replay-trace PRIVATE aosp aosp_surfaceflinger_frontend aosp_libgui)
 # GraphicBuffer's eager-create path pulls in glGenTextures / glTexImage2D
 # from libui; the CLI never has a live GL context so those calls no-op,
